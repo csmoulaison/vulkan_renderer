@@ -8,10 +8,17 @@
 VkResult vk_verify_macro_result;
 #define vk_verify(FUNC) vk_verify_macro_result = FUNC;\
 						if(vk_verify_macro_result != VK_SUCCESS)\
-						{\
+{\
 							printf("vk_verify error (%i)\n", vk_verify_macro_result);\
 							panic();\
 						}\
+
+typedef struct
+{
+	VkDeviceMemory*      memory;
+	VkMemoryRequirements requirements;
+	uint32_t             type_mask;
+} VulkanAllocationConfig;
 
 typedef struct
 {
@@ -19,6 +26,15 @@ typedef struct
 	VkImageView     image_view;
 	VkDeviceMemory  device_memory;
 } VulkanAllocatedImage;
+
+typedef struct
+{
+	VulkanAllocatedImage  image;
+	VkExtent2D            extent;
+	VkFormat              format;
+	VkSampleCountFlagBits sample_count;
+	VkUsageMask           usage_mask;
+} VulkanAllocatedImageConfig;
 
 typedef struct
 {
@@ -78,12 +94,14 @@ typedef struct
 	VulkanMemoryBuffer   ubo_device_buffer;
 	// CONSIDER - Does this need to be void*? Why not just do the struct?
 	void*                ubo_mapped_memory;
+
+	// Used in swapchain initialization.
+	float                 device_max_sampler_anisotropy;
+	VkSampleCountFlagBits device_framebuffer_sample_counts;
 } VulkanRenderer;
 
 typedef struct
 {
-	float                 device_max_sampler_anisotropy;
-	VkSampleCountFlagBits device_framebuffer_sample_counts;
 } VulkanInitContext;
 
 typedef struct
@@ -110,9 +128,221 @@ typedef struct
 	uint8_t window_extensions_len;
 } VulkanPlatform;
 
+void vulkan_allocate_memory(
+	VulkanRenderer*        renderer, 
+	VulkanAllocationConfig config)
+{
+	VkPhysicalDeviceMemoryProperties properties;
+	vkGetPhysicalDeviceMemoryProperties(renderer->physical_device, &properties);
+
+	uint32_t suitable_type_index = UINT32_MAX;
+	for(uint32_t type_index = 0; type_index < properties.memoryTypeCount; type_index++)
+	{
+		if((config.requirements.memoryTypeBits & (1 << type_index))
+			&& (properties.memoryTypes[type_index].propertyFlags & config.type_mask) == config.type_mask)
+		{
+			suitable_type_index = type_index;
+			break;
+		}
+	}	
+	if(suitable_type_index == UINT32_MAX)
+	{
+		panic();
+	}
+
+	VkMemoryAllocateInfo allocate_info = 
+	{
+		.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+		.pNext           = 0,
+		.allocationSize  = config.requirements.size,
+		.memoryTypeIndex = suitable_type_index
+	};
+	vk_verify(vkAllocateMemory(renderer->device, &allocate_info, 0, config.memory));
+}
+
+void vulkan_allocate_buffer(
+	VulkanRenderer* renderer,
+
 void vulkan_initialize_swapchain(VulkanRenderer* renderer, bool recreate)
 {
-	// NOW - This is next.
+	// This function is being called in one of two situations:
+	// 1. During program initialization.
+	// 2. The platform surface has changed and swapchain related information is no longer valid.
+	if(recreate)
+	{
+		vkDeviceWaitIdle(renderer->device);
+
+		for(uint8_t image_index; image_index < renderer->swapchain_images_len; image_index++)
+		{
+			vkDestroyImageView(renderer->device, renderer->swapchain_image_views[image_index], 0);
+		}
+
+		vkDestroySwapchainKHR(renderer->device, renderer->swapchain, 0);
+
+		vkDestroyImage(renderer->device, renderer->render_image, 0);
+		vkDestroyImageView(renderer->device, renderer->render_image_view, 0);
+		vkFreeMemory(renderer->device, vk->render_image_memory, 0);
+
+		vkDestroySemaphore(renderer->device, renderer->semaphore_image_available, 0);
+		vkDestroySemaphore(renderer->device, renderer->semaphore_render_finished, 0);
+	}
+
+	// Query surface capabilities to give us the following info:
+	// - The transform of the surface (believe the position on screen, roughly speaking?)
+	// - Swapchain width and height
+	// - Swapchain image count
+	VkSurfaceCapabilitiesKHR surface_capabilities;
+	vk_verify(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
+		renderer->physical_device, 
+		renderer->surface, 
+		&surface_capabilities);
+
+	VkSurfaceTransformFlagBitsKHR surface_pre_transform;
+
+	renderer->swapchain_extent.width = surface_capabilities.maxImageExtent.width;
+	renderer->swapchain_extent.width = surface_capabilities.maxImageExtent.height;
+
+	// CONSIDER - Not sure exactly what this logic is for. Look at it a little closer.
+	uint32_t swapchain_image_count = abilities.minImageCount + 1;
+	if(abilities.maxImageCount > 0 && image_count > abilities.maxImageCount) 
+	{	
+		swapchain_image_count = abilities.maxImageCount;
+	}
+
+	// Choose the best surface format.
+	uint32_t formats_len
+	vkGetPhysicalSurfaceFormatsKHR(renderer->physical_device, renderer->surface, &formats_len, 0);
+	if(formats_len == 0)
+	{
+		panic();
+	}
+
+	VkSurfaceFormatKHR formats[formats_len];
+	vkGetPhysicalDeviceSurfaceFormatsKHR(renderer->physical_device, renderer->surface, &formats_len, formats);
+
+	vulkan->surface_format = formats[0];
+	for(uint32_t format_index = 0; format_index < formats_len; format_index++)
+	{
+		if(formats[format_index].format == VK_FORMAT_B8G8R8A8_SRGB 
+			&& formats[format_index].colorSpace == VK_COLOR_SPACE_SRGB_NONELINEAR_KHR)
+		{
+			renderer->surface_format = formats[format_index];
+			break;
+		}
+	}
+
+	// Choose presentation mode, defaulting to VK_PRESENT_MODE_FIFO_KHR, which is guaranteed to
+	// be supported by the spec.
+	VkPresentModeKHR present_mode = VK_PRESENT_MODE_FIFO_KHR;
+
+	uint32_t modes_len;
+	vk_verify(vkGetPhysicalDeviceSurfacePresentModesKHR(renderer->physical_device, renderer->surface, &modes_len, 0));
+
+	VkPresentModeKHR modes[modes_len];
+	vk_verify(vkGetPhysicalDeviceSurfacePresentModesKHR(renderer->physical_device, renderer->surface, &modes_len, modes));
+
+	for(uint32_t mode_index = 0; mode_index < modes_len; mode_index++)
+	{
+		if(modes[mode_index] == VK_PRESENT_MODE_MAILBOX_KHR)
+		{
+			present_mode = modes[i];
+			break;
+		}
+	}
+
+#if VK_IMMEDIATE
+	present_mode = CK_PRESENT_MODE_IMMEDIATE_KHR;
+#endif
+
+	// Create the swapchain.
+	VkSwapchainCreateInfoKHR swapchain_create_info = 
+	{
+		.sType                 = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
+		.pNext                 = 0,
+		.flags                 = 0, 
+		.surface               = renderer->surface,
+		.minImageCount         = swapchain_image_count, 
+		.imageFormat           = renderer->surface_format.format,
+		.imageColorSpace       = renderer->surface_format.colorSpace,
+		.imageExtent           = renderer->swapchain_extent,
+		.imageArrayLayers      = 1,
+		.imageUsage            = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+		.imageSharingMode      = VK_SHARING_MODE_EXCLUSIVE,
+		.queueFamilyIndexCount = 0,
+		.pQueueFamilyIndices   = 0,
+		.preTransform          = surface_pre_transform,
+		.compositeAlpha        = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+		.presentMode           = present_mode,
+		.clipped               = VK_TRUE,
+		.oldSwapchain          = VK_NULL_HANDLE
+	}
+
+	vk_verify(vkCreateSwapchainKHR(renderer->device, &swapchain_create_info, 0, &renderer->swapchain));
+
+	// Get references to the swapchain images.
+	vk_verify(vkGetSwapchainImagesKHR(
+		renderer->device, 
+		renderer->swapchain, 
+		&renderer->swapchain_images_len, 
+		0));
+	vk_verify(vkGetSwapchainImagesKHR(
+		renderer->device, 
+		renderer->swapchain, 
+		&renderer->swapchain_images_len, 
+		renderer->swapchain_images));
+
+	// Allocate resources for render and depth images.
+	//
+	// CONSIDER - The following description is a bit lacking in understanding.
+	// The render image is used in the rendering pipeline, and is transferred to the swapchain.
+	vulkan_allocate_image(
+		renderer, 
+		(VulkanAllocatedImageConfig)
+		{
+			.image        = &renderer->render_image,
+			.extent       = renderer->swapchain_extent,
+			.format       = renderer->surface_format.format,
+			.sample_count = renderer->render_sample_count,
+			.usage_mask   = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT
+		});
+
+	vulkan_allocate_image(
+		renderer, 
+		(VulkanAllocatedImageConfig)
+		{
+			.image        = &renderer->depth_image,
+			.extent       = renderer->swapchain_extent,
+			.format       = DEPTH_ATTACHMENT_FORMAT,
+			.sample_count = renderer->render_sample_count,
+			.usage_mask   = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT
+		});
+
+	for(uint32_t image_index = 0; image_index < renderer->swapchain_images_len; image_index++)
+	{
+		vulkan_create_image_view(
+			renderer,
+			(VkImageViewConfig)
+			{
+				.view        = &renderer->swapchain_image_views[image_index],
+				.image       = renderer->swapchain_images[image_index],
+				.format      = renderer->surface_format.format,
+				.aspect_mask = VK_IMAGE_ASPECT_COLOR_BIT
+			});
+	}
+
+	// Create synchonization primitives.
+	//
+	// This needs to happen every time the swapchain is recreated because otherwise semaphores
+	// could be in a now invalid state(terminology?).
+	VkSemaphoreCreateInfo semaphore_create_info =
+	{
+		.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+		.pNext = 0,
+		.flags = 0
+	}
+
+	vk_verify(vkCreateSemaphore(renderer->device, &semaphore_create_info, 0, &renderer->semaphore_image_available));
+	vk_verify(vkCreateSemaphore(renderer->device, &semaphore_create_info, 0, &renderer->semaphore_render_finished));
 }
 
 // A broad overview of the initialization of our Vulkan backend.
@@ -137,7 +367,7 @@ void vulkan_initialize_renderer(VulkanRenderer* renderer, VulkanPlatform* platfo
 		panic();
 	}
 
-	// Define instance extensions and layers, initially padding both by 1 for possible debug extension.
+	// Define instance extensions and layers, padding both arrays by 1 for possible debug extension.
 	uint32_t instance_extensions_len = platform->window_extensions_len;
 	const char* instance_extensions[instance_extensions_len + 1];
 	for(uint8_t i = 0; i < platform->window_extensions_len; i++)
@@ -166,12 +396,12 @@ void vulkan_initialize_renderer(VulkanRenderer* renderer, VulkanPlatform* platfo
 		.pApplicationInfo        = &(VkApplicationInfo)
 		{
 			.sType              = VK_STRUCTURE_TYPE_APPLICATION_INFO,
-	    	.pNext              = 0,
-	    	.pApplicationName   = PROGRAM_NAME,
-	    	.applicationVersion = 1,
-	    	.pEngineName        = 0,
-	    	.engineVersion      = 0,
-	    	.apiVersion         = desired_api_version
+	    		.pNext              = 0,
+	    		.pApplicationName   = PROGRAM_NAME,
+	    		.applicationVersion = 1,
+	    		.pEngineName        = 0,
+	    		.engineVersion      = 0,
+	    		.apiVersion         = desired_api_version
 		},
 		.enabledLayerCount       = layers_len,
 		.ppEnabledLayerNames     = layers,
@@ -394,30 +624,9 @@ void vulkan_initialize_renderer(VulkanRenderer* renderer, VulkanPlatform* platfo
 	};
 	vk_verify(vkCreateDevice(renderer->physical_device, &device_create_info, 0, &renderer->device));
 
-	// LATER - Create basic vulkan resources, including instance, device, and physical device.
-	// 
-	// We will need the following extensions:
-	// - Platform window extensions
-	// - VK_EXT_DEBUG_UTILS_EXTENSION_NAME
-	// 
-	// And the following layers
-	// - VK_LATER_KHRONOS_VALIDATION
-	// 
-	// And the following device queues:
-	// - graphics
-	// - present
-	// 
-	// And the following extension properties:
-	// - VK_KHR_SWAPCHAIN_EXTENSION_NAME
-	// - VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME
-	// 
-	// And we will get the sample count from the VkPhysicalDeviceProperties.
-	// And we will 
-
-	// LATER - 
+	vulkan_initialize_swapchain(renderer, false);
 }
 
 void vulkan_loop(VulkanRenderer* renderer, RenderList* render_list)
 {
-
 }
