@@ -231,12 +231,12 @@ Vec3 vec3_cross(Vec3 a, Vec3 b)
 // TODO - our own m4 struct
 void mat4_lookat(Vec3 eye, Vec3 center, Vec3 up, Mat4 dst)
 {
-	// LATER - Get this working
+	// TODO - Get this working
 	//glm_lookat(eye.data, center.data, up.data, dst);
 }
 
 float radians(float degrees)
 {
-	// LATER - Get this working
+	// TODO - Get this working
 	return 0; // glm_rad(degrees);
 }

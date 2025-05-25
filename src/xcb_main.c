@@ -158,7 +158,7 @@ int32_t main(int32_t argc, char** argv)
 	xcb.mouse_just_warped = false;
 	xcb.mouse_moved_yet = false;
 
-	// LATER - raw memory page allocation
+	// TODO - raw memory page allocation
 	xcb.memory_pool       = malloc(MEMORY_POOL_BYTES);
 	xcb.memory_pool_bytes = MEMORY_POOL_BYTES;
 
@@ -334,6 +334,7 @@ int32_t main(int32_t argc, char** argv)
     		xcb.window_h,
     		&xcb.input,
     		&xcb.render_list);
+		xcb.render_list.clear_color = vec3_new(0.02, 0.03, 0.08);
 
 		//xcb.render_list.t = xcb.time_since_start / 4.0f;
 		vulkan_loop(&xcb.renderer, &xcb.render_list);
