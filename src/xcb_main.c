@@ -4,16 +4,14 @@
 #include <string.h>
 #include <time.h>
 
-#include "utils/linalg.c"
-#include "utils/panic.c"
+#include "panic.c"
+#include "linalg.c"
+#include "random.c"
 
 #include "program.c"
 #include "render_list.c"
 
-#include "game_input.c"
-#include "game_memory.c"
-#include "game_init.c"
-#include "game_loop.c"
+#include "game.c"
 
 #define VK_USE_PLATFORM_XCB_KHR
 #include <vulkan/vulkan.h>
@@ -72,6 +70,15 @@ VkResult xcb_create_surface_callback(VulkanRenderer* renderer, void* context)
 	info.window     = xcb->window;
 
 	return vkCreateXcbSurfaceKHR(renderer->instance, &info, 0, &renderer->surface);
+}
+
+void print_mat(float* m)
+{
+	for(uint8_t i = 0; i < 16; i++)
+	{
+		printf("%.2f, ", m[i]);
+	}
+	printf("\n");
 }
 
 int32_t main(int32_t argc, char** argv)
@@ -162,7 +169,7 @@ int32_t main(int32_t argc, char** argv)
 	xcb.memory_pool       = malloc(MEMORY_POOL_BYTES);
 	xcb.memory_pool_bytes = MEMORY_POOL_BYTES;
 
-	game_init(xcb.memory_pool, xcb.memory_pool_bytes);
+	game_initialize(xcb.memory_pool, xcb.memory_pool_bytes);
 
     if(clock_gettime(CLOCK_REALTIME, &xcb.time_prev))
     {
@@ -334,7 +341,6 @@ int32_t main(int32_t argc, char** argv)
     		xcb.window_h,
     		&xcb.input,
     		&xcb.render_list);
-		xcb.render_list.clear_color = vec3_new(0.02, 0.03, 0.08);
 
 		//xcb.render_list.t = xcb.time_since_start / 4.0f;
 		vulkan_loop(&xcb.renderer, &xcb.render_list);

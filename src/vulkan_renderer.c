@@ -23,23 +23,26 @@ typedef struct
 
 typedef struct
 {
-	alignas(64) struct
-	{
-		alignas(16) Mat4 view;
-		alignas(16) Vec4 projection;
-		alignas(16) Vec3 clear_color;
-	} global;
+	alignas(16) mat4 view;
+	alignas(16) mat4 projection;
+	alignas(16) Vec3 clear_color;
+} VulkanHostMappedGlobal;
 
-	alignas(64) struct
-	{
-		alignas(16) Mat4 models[INSTANCES_COUNT];
-	} instance;
+typedef struct
+{
+	alignas(16) mat4 models[INSTANCES_COUNT];
+} VulkanHostMappedInstance;
+
+typedef struct
+{
+	alignas(64) VulkanHostMappedGlobal   global;
+	alignas(64) VulkanHostMappedInstance instance;
 } VulkanHostMappedData;
 
 typedef struct
 {
 	Vec3 position;
-	Vec3 color;
+	Vec2 texture_uv;
 } VulkanMeshVertex;
 
 typedef struct
@@ -48,11 +51,13 @@ typedef struct
 	void*    index_memory;
 
 	// In bytes
+	// TODO - this obviously shouldn't be defined for every mesh.
 	uint32_t vertex_data_stride;
 
 	uint32_t vertices_len;
 	uint32_t indices_len;
 
+	// TODO - Will be used for when multiple meshes.
 	uint32_t vertex_buffer_offset;
 	uint32_t index_buffer_offset;
 } VulkanMeshData;
@@ -95,7 +100,7 @@ typedef struct
 
 	VulkanMemoryBuffer    host_mapped_buffer;
 	// CONSIDER - Does this need to be void*? Why not just do the struct?
-	VulkanHostMappedData* host_mapped_data;
+	void*                 host_mapped_data;
 
 	// Used in swapchain initialization.
 	// 

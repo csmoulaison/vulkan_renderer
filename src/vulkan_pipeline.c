@@ -64,9 +64,8 @@ void vulkan_create_graphics_pipeline(
 	VkDescriptorSetLayoutBinding descriptor_set_layout_bindings[descriptor_sets_len];
 	VkDescriptorPoolSize         descriptor_pool_sizes         [descriptor_sets_len];
 	VkWriteDescriptorSet         write_descriptor_sets         [descriptor_sets_len];
-
-	VkDescriptorBufferInfo descriptor_buffer_info = {};
-	VkDescriptorImageInfo  descriptor_image_info  = {};
+	VkDescriptorBufferInfo       descriptor_buffer_infos       [descriptor_sets_len];
+	VkDescriptorImageInfo        descriptor_image_infos        [descriptor_sets_len];
 
 	for(uint8_t binding = 0; binding < descriptor_sets_len; binding++)
 	{
@@ -87,6 +86,23 @@ void vulkan_create_graphics_pipeline(
 			.descriptorCount = 1
 		};
 
+		// Only used with uniform buffer or uniform buffer dynamic descriptor types.
+		descriptor_buffer_infos[binding] = (VkDescriptorBufferInfo)
+		{
+			.buffer = renderer->host_mapped_buffer.buffer,
+			.offset = config->offset_in_host_memory,
+			.range  = config->range_in_host_memory
+		};
+
+		// Only used with image sampler descriptor type.
+		descriptor_image_infos[binding] = (VkDescriptorImageInfo)
+		{
+			.sampler     = renderer->texture_sampler,
+			// TODO - This is dependant on having only one texture, of course.
+			.imageView   = renderer->texture_images[0].view,
+			.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+		};
+
 		write_descriptor_sets[binding] = (VkWriteDescriptorSet)
 		{
 			.sType            = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
@@ -96,33 +112,10 @@ void vulkan_create_graphics_pipeline(
 			.dstArrayElement  = 0,
 			.descriptorCount  = 1,
 			.descriptorType   = config->type,
-			.pImageInfo       = 0,
-			.pBufferInfo      = 0,
+			.pImageInfo       = &descriptor_image_infos[binding],
+			.pBufferInfo      = &descriptor_buffer_infos[binding],
 			.pTexelBufferView = 0
 		};
-
-		if(config->type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER 
-			|| config->type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC)
-		{
-			descriptor_buffer_info = (VkDescriptorBufferInfo)
-			{
-				.buffer = renderer->host_mapped_buffer.buffer,
-				.offset = config->offset_in_host_memory,
-				.range  = config->range_in_host_memory
-			};
-			write_descriptor_sets[binding].pBufferInfo = &descriptor_buffer_info;
-		}
-		else if(config->type == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
-		{
-			descriptor_image_info = (VkDescriptorImageInfo)
-			{
-				.sampler     = renderer->texture_sampler,
-				// TODO - This is dependant on having only one texture, of course.
-				.imageView   = renderer->texture_images[0].view,
-				.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-			};
-			write_descriptor_sets[binding].pImageInfo = &descriptor_image_info;
-		}
 	}
 
 	// Create descriptors resources.

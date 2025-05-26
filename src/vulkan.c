@@ -9,6 +9,10 @@
 #define STBI_ONLY_BMP
 #include "stb/stb_image.h"
 
+// TODO - Load models ourselves, presumably once we decide on what format(s) we are using.
+#define TINYOBJ_LOADER_C_IMPLEMENTATION
+#include "tinyobj_loader_c/tinyobj_loader_c.h"
+
 #include "vulkan_verify.c"
 #include "vulkan_renderer.c"
 #include "vulkan_allocate.c"
@@ -136,7 +140,7 @@ void vulkan_initialize_swapchain(VulkanRenderer* renderer, bool recreate)
 		.compositeAlpha        = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
 		.presentMode           = present_mode,
 		.clipped               = VK_TRUE,
-		.oldSwapchain          = VK_NULL_HANDLE
+		.oldSwapchain          = 0
 	};
 
 	vk_verify(vkCreateSwapchainKHR(renderer->device, &swapchain_create_info, 0, &renderer->swapchain));
@@ -506,62 +510,13 @@ void vulkan_initialize_renderer(VulkanRenderer* renderer, VulkanPlatform* platfo
 		0, 
 		(void*)&renderer->host_mapped_data);
 
-	VulkanDescriptorSetConfig descriptor_set_configs[3] =
-	{
-		{
-			.type                  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-			.shader_stage_flags    = VK_SHADER_STAGE_VERTEX_BIT,
-			.offset_in_host_memory = offsetof(VulkanHostMappedData, global),
-			.range_in_host_memory  = sizeof(((VulkanHostMappedData){}).global)
-		},
-		{
-			.type                  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
-			.shader_stage_flags    = VK_SHADER_STAGE_VERTEX_BIT,
-			.offset_in_host_memory = offsetof(VulkanHostMappedData, instance),
-			.range_in_host_memory  = sizeof(((VulkanHostMappedData){}).instance)
-		},
-		{
-			.type                  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-			.shader_stage_flags    = VK_SHADER_STAGE_FRAGMENT_BIT,
-			.offset_in_host_memory = 0,
-			.range_in_host_memory  = 0
-		}
-	};
-
-	VulkanVertexInputAttributeConfig vertex_input_attribute_configs[2] =
-	{
-		{
-			.format                = VK_FORMAT_R32G32B32_SFLOAT,
-			.offset_in_vertex_data = offsetof(VulkanMeshVertex, position)
-		},
-		{
-			.format                = VK_FORMAT_R32G32B32_SFLOAT,
-			.offset_in_vertex_data = offsetof(VulkanMeshVertex, color)
-		}
-	};
-
-	// Create graphics pipeline.
-	// TODO - This is dependant on only having one pipeline.
-	vulkan_create_graphics_pipeline(
-		renderer,
-		&renderer->pipelines[0],
-		"shaders/world_vertex.spv",
-		"shaders/world_fragment.spv",
-		descriptor_set_configs,
-		2,
-		vertex_input_attribute_configs,
-		2,
-		sizeof(VulkanMeshVertex));
-
-	// TODO - Create second pipeline for IMGUI.
-
 	// Create command pool and allocate main command buffer
 	VkCommandPoolCreateInfo command_pool_create_info = 
 	{
 		.sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
 		.pNext            = 0,
 		.flags            = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
-		// NOTE - This is kind of icky.
+		// NOTE - This is kind of icky because this variable was set so long ago and appears proximal there.
 		.queueFamilyIndex = best_physical_device.graphics_family_index
 	};
 	vk_verify(vkCreateCommandPool(renderer->device, &command_pool_create_info, 0, &renderer->command_pool));
@@ -598,7 +553,6 @@ void vulkan_initialize_renderer(VulkanRenderer* renderer, VulkanPlatform* platfo
 		.borderColor             = VK_BORDER_COLOR_INT_OPAQUE_BLACK,
 		.unnormalizedCoordinates = VK_FALSE
 	};
-
 	vk_verify(vkCreateSampler(renderer->device, &sampler_create_info, 0, &renderer->texture_sampler));
 
 	// Allocate texture image.
@@ -606,7 +560,7 @@ void vulkan_initialize_renderer(VulkanRenderer* renderer, VulkanPlatform* platfo
 	int32_t texture_w;
 	int32_t texture_h;
 	int32_t texture_channels;
-	stbi_uc* image_pixels = stbi_load("stone.bmp", &texture_w, &texture_h, &texture_channels, STBI_rgb_alpha);
+	stbi_uc* image_pixels = stbi_load("assets/viking_room.bmp", &texture_w, &texture_h, &texture_channels, STBI_rgb_alpha);
 	if(!image_pixels)
 	{
 		printf("Failed to load image file.\n");
@@ -678,6 +632,17 @@ void vulkan_initialize_renderer(VulkanRenderer* renderer, VulkanPlatform* platfo
 			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
 			1,
 			&region);
+
+		vulkan_image_memory_barrier(
+			transient_command_buffer,
+			renderer->texture_images[0].image,
+			VK_IMAGE_ASPECT_COLOR_BIT,
+			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+			VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+			0,
+			VK_ACCESS_TRANSFER_WRITE_BIT,
+			VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+			VK_PIPELINE_STAGE_TRANSFER_BIT);
 	}
 	vulkan_end_transient_commands(renderer, transient_command_buffer, renderer->graphics_queue);
 
@@ -692,38 +657,198 @@ void vulkan_initialize_renderer(VulkanRenderer* renderer, VulkanPlatform* platfo
 		VK_FORMAT_R8G8B8A8_SRGB,
 		VK_IMAGE_ASPECT_COLOR_BIT);
 
+	// Create graphics pipeline for meshes.
+	// TODO - Create second pipeline for IMGUI.
 
+	VulkanDescriptorSetConfig descriptor_set_configs[3] =
+	{
+		{
+			.type                  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+			.shader_stage_flags    = VK_SHADER_STAGE_VERTEX_BIT,
+			.offset_in_host_memory = offsetof(VulkanHostMappedData, global),
+			.range_in_host_memory  = sizeof(VulkanHostMappedGlobal)
+		},
+		{
+			.type                  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
+			.shader_stage_flags    = VK_SHADER_STAGE_VERTEX_BIT,
+			.offset_in_host_memory = offsetof(VulkanHostMappedData, instance),
+			.range_in_host_memory  = sizeof(VulkanHostMappedInstance)
+		},
+		{
+			.type                  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+			.shader_stage_flags    = VK_SHADER_STAGE_FRAGMENT_BIT,
+			.offset_in_host_memory = 0,
+			.range_in_host_memory  = 0
+		}
+	};
+
+	VulkanVertexInputAttributeConfig vertex_input_attribute_configs[3] =
+	{
+		{
+			.format                = VK_FORMAT_R32G32B32_SFLOAT,
+			.offset_in_vertex_data = offsetof(VulkanMeshVertex, position)
+		},
+		{
+			.format                = VK_FORMAT_R32G32_SFLOAT,
+			.offset_in_vertex_data = offsetof(VulkanMeshVertex, texture_uv)
+		}
+	};
+
+	// Create graphics pipeline.
+	// TODO - This is dependant on only having one pipeline.
+	vulkan_create_graphics_pipeline(
+		renderer,
+		&renderer->pipelines[0],
+		"shaders/world_vertex.spv",
+		"shaders/world_fragment.spv",
+		descriptor_set_configs,
+		3,
+		vertex_input_attribute_configs,
+		2,
+		sizeof(VulkanMeshVertex));
+
+	FILE* file = fopen("assets/viking_room.obj", "r");
+	if(file == NULL)
+	{
+		panic();
+	}
+
+
+	// Load .obj model.
+	// 
+	// The tricky thing about .obj is texture UVs being defined per index buffer vertex, as opposted
+	// to being defined per vertex buffer vertex, you see.
+	// 
+	// To fix this, we'll apply the proper UVs and whatnot to the vertex buffer vertices retroactively,
+	// as we are iterating our way through the faces.
+
+	Vec3 tmp_vertices   [8000];
+	uint32_t tmp_vertices_len    = 0;
+	Vec2 tmp_texture_uvs[8000];
+	uint32_t tmp_texture_uvs_len = 0;
+
+	// Note that tmp_face_elements do not correspond with "f" records, but rather with one of the
+	// elements in those records.
+	struct 
+	{
+		uint32_t vertex_index;
+		uint32_t texture_uv_index;
+	} tmp_face_elements[32000];
+	uint32_t tmp_face_elements_len = 0;
+
+	while(true)
+	{
+		char keyword[128];
+		int32_t res = fscanf(file, "%s", keyword);
+
+		if(res == EOF)
+		{
+			break;
+		}
+
+		if(strcmp(keyword, "v") == 0)
+		{
+			Vec3* tmp_vertex = &tmp_vertices[tmp_vertices_len];
+			fscanf(file, "%f %f %f", &tmp_vertex->x, &tmp_vertex->y, &tmp_vertex->z);
+			tmp_vertices_len++;
+		}
+		else if(strcmp(keyword, "vt") == 0)
+		{
+			Vec2* tmp_texture_uv = &tmp_texture_uvs[tmp_texture_uvs_len];
+			fscanf(file, "%f %f", &tmp_texture_uv->x, &tmp_texture_uv->y);
+			tmp_texture_uv->y = 1 - tmp_texture_uv->y;
+			tmp_texture_uvs_len++;
+
+		}
+		else if(strcmp(keyword, "f") == 0)
+		{
+			int32_t throwaways[3];
+			int32_t values_len = fscanf(file, "%d/%d/%d %d/%d/%d %d/%d/%d\n", 
+				&tmp_face_elements[tmp_face_elements_len + 0].vertex_index, 
+				&tmp_face_elements[tmp_face_elements_len + 0].texture_uv_index, 
+				&throwaways[0], 
+				&tmp_face_elements[tmp_face_elements_len + 1].vertex_index, 
+				&tmp_face_elements[tmp_face_elements_len + 1].texture_uv_index, 
+				&throwaways[1], 
+				&tmp_face_elements[tmp_face_elements_len + 2].vertex_index, 
+				&tmp_face_elements[tmp_face_elements_len + 2].texture_uv_index, 
+				&throwaways[2]
+			);
+			if(values_len != 9)
+			{
+				panic();
+			}
+			tmp_face_elements_len += 3;
+		}
+	}
+
+	fclose(file);
+
+
+	// NOW - we are just overwriting texture uv information here.
+	// NOW - vertices_len and in fact tmp_vertices not required, yeah?
+	// 
+	// Now's the time to actually sort this out. Collapse this code one bit at a time.
+	// 
+	// TODO - After figuring out the top two items, it's on to -> multiple models!
+	// - First, sort out which bits of the code reference only the one model, and if we know how, change
+	// those bits to allow for multiple.
+	// 
+	// TODO - After that, we want to pull out of here and work on the open GL implementation, with the
+	// goal of atomizing the functions of both GL and Vulkan sufficiently to develop a robust renderer
+	// front-end. The ideal of the split is to conserve all possible performance characteristics of
+	// each API while minimizing the redundancy in the two implementations.
+	VulkanMeshVertex vertices[8000];
+	uint32_t         vertices_len = 0;
+	for(uint32_t vertex_index = 0; vertex_index < tmp_vertices_len; vertex_index++)
+	{
+		vertices[vertex_index].position = tmp_vertices[vertex_index];
+		vertices_len++;
+	}
+	
+	uint32_t         indices [32000];
+	uint32_t         indices_len  = 0;
+	for(uint32_t element_index = 0; element_index < tmp_face_elements_len; element_index++)
+	{
+		uint32_t index = tmp_face_elements[element_index].vertex_index - 1;
+		indices[element_index] = index;
+		vertices[index].texture_uv = tmp_texture_uvs[tmp_face_elements[element_index].texture_uv_index - 1];
+
+		indices_len++;
+	}
+
+	/*
 	VulkanMeshVertex vertex_hard_data[24] = 
 	{
-	    { {{{-0.5f,  0.5f, -0.5f}}}, {{{ 1.0f, 0.0f, 0.0f}}} },
-	    { {{{ 0.5f,  0.5f, -0.5f}}}, {{{ 0.0f, 1.0f, 0.0f}}} },
-	    { {{{ 0.5f, -0.5f, -0.5f}}}, {{{ 0.0f, 0.0f, 1.0f}}} },
-	    { {{{-0.5f, -0.5f, -0.5f}}}, {{{ 0.0f, 0.0f, 0.0f}}} }, 
+	    { {{{-0.5f,  0.5f, -0.5f}}}, {{{ 1.0, 0.0f }}} },
+	    { {{{ 0.5f,  0.5f, -0.5f}}}, {{{ 0.0, 0.0f }}} },
+	    { {{{ 0.5f, -0.5f, -0.5f}}}, {{{ 0.0, 1.0f }}} },
+	    { {{{-0.5f, -0.5f, -0.5f}}}, {{{ 1.0, 1.0f }}} }, 
 
-	    { {{{-0.5f, -0.5f,  0.5f}}}, {{{ 1.0f, 0.0f, 0.0f}}} },
-	    { {{{ 0.5f, -0.5f,  0.5f}}}, {{{ 0.0f, 1.0f, 0.0f}}} },
-	    { {{{ 0.5f,  0.5f,  0.5f}}}, {{{ 0.0f, 0.0f, 1.0f}}} },
-	    { {{{-0.5f,  0.5f,  0.5f}}}, {{{ 0.0f, 0.0f, 0.0f}}} },
+	    { {{{-0.5f, -0.5f,  0.5f}}}, {{{ 1.0, 0.0f }}}  },
+	    { {{{ 0.5f, -0.5f,  0.5f}}}, {{{ 0.0, 0.0f }}}  },
+	    { {{{ 0.5f,  0.5f,  0.5f}}}, {{{ 0.0, 1.0f }}}  },
+	    { {{{-0.5f,  0.5f,  0.5f}}}, {{{ 1.0, 1.0f }}}  },
 
-	    { {{{-0.5f,  0.5f,  0.5f}}}, {{{ 1.0f, 0.0f, 0.0f}}} },
-	    { {{{-0.5f,  0.5f, -0.5f}}}, {{{ 0.0f, 1.0f, 0.0f}}} },
-	    { {{{-0.5f, -0.5f, -0.5f}}}, {{{ 0.0f, 0.0f, 1.0f}}} },
-	    { {{{-0.5f, -0.5f,  0.5f}}}, {{{ 0.0f, 0.0f, 0.0f}}} },
+	    { {{{-0.5f,  0.5f,  0.5f}}}, {{{ 1.0, 0.0f }}}  },
+	    { {{{-0.5f,  0.5f, -0.5f}}}, {{{ 0.0, 0.0f }}}  },
+	    { {{{-0.5f, -0.5f, -0.5f}}}, {{{ 0.0, 1.0f }}}  },
+	    { {{{-0.5f, -0.5f,  0.5f}}}, {{{ 1.0, 1.0f }}}  },
 
-	    { {{{ 0.5f, -0.5f,  0.5f}}}, {{{ 1.0f, 0.0f, 0.0f}}} },
-	    { {{{ 0.5f, -0.5f, -0.5f}}}, {{{ 0.0f, 1.0f, 0.0f}}} },
-	    { {{{ 0.5f,  0.5f, -0.5f}}}, {{{ 0.0f, 0.0f, 1.0f}}} },
-	    { {{{ 0.5f,  0.5f,  0.5f}}}, {{{ 0.0f, 0.0f, 0.0f}}} },
+	    { {{{ 0.5f, -0.5f,  0.5f}}}, {{{ 1.0, 0.0f }}}  },
+	    { {{{ 0.5f, -0.5f, -0.5f}}}, {{{ 0.0, 0.0f }}}  },
+	    { {{{ 0.5f,  0.5f, -0.5f}}}, {{{ 0.0, 1.0f }}}  },
+	    { {{{ 0.5f,  0.5f,  0.5f}}}, {{{ 1.0, 1.0f }}}  },
 
-	    { {{{-0.5f, -0.5f, -0.5f}}}, {{{ 1.0f, 0.0f, 0.0f}}} },
-	    { {{{ 0.5f, -0.5f, -0.5f}}}, {{{ 0.0f, 1.0f, 0.0f}}} },
-	    { {{{ 0.5f, -0.5f,  0.5f}}}, {{{ 0.0f, 0.0f, 1.0f}}} },
-	    { {{{-0.5f, -0.5f,  0.5f}}}, {{{ 0.0f, 0.0f, 0.0f}}} },
+	    { {{{-0.5f, -0.5f, -0.5f}}}, {{{ 1.0, 0.0f }}}  },
+	    { {{{ 0.5f, -0.5f, -0.5f}}}, {{{ 0.0, 0.0f }}}  },
+	    { {{{ 0.5f, -0.5f,  0.5f}}}, {{{ 0.0, 1.0f }}}  },
+	    { {{{-0.5f, -0.5f,  0.5f}}}, {{{ 1.0, 1.0f }}}  },
 
-	    { {{{-0.5f,  0.5f,  0.5f}}}, {{{ 1.0f, 0.0f, 0.0f}}} },
-	    { {{{ 0.5f,  0.5f,  0.5f}}}, {{{ 0.0f, 1.0f, 0.0f}}} },
-	    { {{{ 0.5f,  0.5f, -0.5f}}}, {{{ 0.0f, 0.0f, 1.0f}}} },
-	    { {{{-0.5f,  0.5f, -0.5f}}}, {{{ 0.0f, 0.0f, 0.0f}}} }
+	    { {{{-0.5f,  0.5f,  0.5f}}}, {{{ 1.0, 0.0f }}} },
+	    { {{{ 0.5f,  0.5f,  0.5f}}}, {{{ 0.0, 0.0f }}} },
+	    { {{{ 0.5f,  0.5f, -0.5f}}}, {{{ 0.0, 1.0f }}} },
+	    { {{{-0.5f,  0.5f, -0.5f}}}, {{{ 1.0, 1.0f }}} }
 	};
 
 	uint16_t index_hard_data[36] = 
@@ -746,6 +871,7 @@ void vulkan_initialize_renderer(VulkanRenderer* renderer, VulkanPlatform* platfo
 		20, 21, 22, 
 		22, 23, 20,
 	};
+	*/
 
 	// Allocate device local memory buffer
 	// 
@@ -753,11 +879,11 @@ void vulkan_initialize_renderer(VulkanRenderer* renderer, VulkanPlatform* platfo
 	uint8_t meshes_len = 1;
 	renderer->mesh_datas[0] = (VulkanMeshData)
 	{
-		.vertex_memory      = (void*)vertex_hard_data,
-		.index_memory       = (void*)index_hard_data,
+		.vertex_memory      = (void*)vertices,
+		.index_memory       = (void*)indices,
 		.vertex_data_stride = sizeof(VulkanMeshVertex),
-		.vertices_len       = 24,
-		.indices_len        = 36
+		.vertices_len       = vertices_len,
+		.indices_len        = indices_len
 	};
 
 	size_t mesh_vertex_buffer_sizes[meshes_len];
@@ -767,7 +893,7 @@ void vulkan_initialize_renderer(VulkanRenderer* renderer, VulkanPlatform* platfo
 	for(uint8_t i = 0; i < meshes_len; i++)
 	{
 		mesh_vertex_buffer_sizes[i]  = renderer->mesh_datas[i].vertex_data_stride * renderer->mesh_datas[i].vertices_len;
-		mesh_index_buffer_sizes[i]   = sizeof(uint16_t)                           * renderer->mesh_datas[i].indices_len;
+		mesh_index_buffer_sizes[i]   = sizeof(uint32_t)                           * renderer->mesh_datas[i].indices_len;
 
 		renderer->mesh_datas[i].vertex_buffer_offset = staging_buffer_size;
 		renderer->mesh_datas[i].index_buffer_offset  = staging_buffer_size + mesh_vertex_buffer_sizes[i];
@@ -813,13 +939,18 @@ void vulkan_initialize_renderer(VulkanRenderer* renderer, VulkanPlatform* platfo
 	vkFreeMemory(renderer->device, staging_memory_buffer.memory, 0);
 }
 
-// NOW - Conform to the new code style.
 void vulkan_loop(VulkanRenderer* renderer, RenderList* render_list)
 {
 	// Translate game memory to uniform buffer object memory.
 	VulkanHostMappedData mem = {};
 	{
 		mem.global.clear_color = render_list->clear_color;
+
+		glm_lookat(render_list->camera_position.data, render_list->camera_target.data, vec3_new(0, 1, 0).data, mem.global.view);
+		glm_perspective(radians(75), (float)renderer->swapchain_extent.width / (float)renderer->swapchain_extent.height, 0.1, 100, mem.global.projection);
+		mem.global.projection[1][1] *= -1;
+
+		memcpy(mem.instance.models, render_list->cube_transform, sizeof(mem.instance.models[0]));
 	}
 	memcpy(renderer->host_mapped_data, &mem, sizeof(mem));
 
@@ -829,7 +960,7 @@ void vulkan_loop(VulkanRenderer* renderer, RenderList* render_list)
 		renderer->swapchain, 
 		UINT64_MAX, 
 		renderer->image_available_semaphore, 
-		VK_NULL_HANDLE, 
+		0, 
 		&image_index);
 	if(res == VK_ERROR_OUT_OF_DATE_KHR || res == VK_SUBOPTIMAL_KHR)
 	{
@@ -837,9 +968,15 @@ void vulkan_loop(VulkanRenderer* renderer, RenderList* render_list)
 		return;
 	}
 
-	VkCommandBufferBeginInfo begin_info = {};
-	begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-	vkBeginCommandBuffer(renderer->main_command_buffer, &begin_info);
+	VkCommandBufferBeginInfo command_buffer_begin_info = 
+	{
+		.sType            = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+		.pNext            = 0,
+		.flags            = 0,
+		.pInheritanceInfo = 0
+	};
+
+	vkBeginCommandBuffer(renderer->main_command_buffer, &command_buffer_begin_info);
 	{
 		// Render image transfer
 		vulkan_image_memory_barrier(
@@ -852,6 +989,7 @@ void vulkan_loop(VulkanRenderer* renderer, RenderList* render_list)
 			VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
 			VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
 			VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+
 		// Depth image transfer
 		vulkan_image_memory_barrier(
 			renderer->main_command_buffer, 
@@ -864,69 +1002,74 @@ void vulkan_loop(VulkanRenderer* renderer, RenderList* render_list)
 			VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
 			VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT);
 
-		VkRenderingAttachmentInfo color_attachment = {};
-		color_attachment.sType              = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-		color_attachment.loadOp             = VK_ATTACHMENT_LOAD_OP_CLEAR;
-		color_attachment.storeOp            = VK_ATTACHMENT_STORE_OP_STORE;
-		color_attachment.imageLayout        = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-		color_attachment.imageView          = renderer->render_image.view;
-		color_attachment.resolveMode        = VK_RESOLVE_MODE_AVERAGE_BIT;
-		color_attachment.resolveImageView   = renderer->swapchain_image_views[image_index];
-		color_attachment.resolveImageLayout = VK_IMAGE_LAYOUT_GENERAL;
-		color_attachment.clearValue.color   = 
-			(VkClearColorValue)
-			{{
-				render_list->clear_color.r, 
-				render_list->clear_color.g, 
-				render_list->clear_color.b, 
-				1.0f
-			}};
-
-		VkRenderingAttachmentInfo depth_attachment = {};
-		depth_attachment.sType                   = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-		depth_attachment.loadOp                  = VK_ATTACHMENT_LOAD_OP_CLEAR;
-		depth_attachment.storeOp                 = VK_ATTACHMENT_STORE_OP_STORE;
-		depth_attachment.imageLayout             = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-		depth_attachment.imageView               = renderer->depth_image.view;
-		depth_attachment.resolveMode             = VK_RESOLVE_MODE_NONE;
-		depth_attachment.clearValue.depthStencil = 
-			(VkClearDepthStencilValue)
+		VkRenderingInfo render_info = 
+		{
+			.sType                = VK_STRUCTURE_TYPE_RENDERING_INFO,
+			.renderArea           = (VkRect2D){{0, 0}, renderer->swapchain_extent},
+			.layerCount           = 1,
+			.colorAttachmentCount = 1,
+			.pColorAttachments    = &(VkRenderingAttachmentInfo)
 			{
-				1.0f,
-				0
-			};
-
-		VkRenderingInfo render_info = {};
-		render_info.sType                = VK_STRUCTURE_TYPE_RENDERING_INFO;
-		render_info.renderArea           = (VkRect2D){{0, 0}, renderer->swapchain_extent};
-		render_info.layerCount           = 1;
-		render_info.colorAttachmentCount = 1;
-		render_info.pColorAttachments    = &color_attachment;
-		render_info.pDepthAttachment     = &depth_attachment;
-		render_info.pStencilAttachment   = 0;
+				.sType                   = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+				.pNext                   = 0,
+				.imageView               = renderer->render_image.view,
+				.imageLayout             = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+				.resolveMode             = VK_RESOLVE_MODE_AVERAGE_BIT,
+				.resolveImageView        = renderer->swapchain_image_views[image_index],
+				.resolveImageLayout      = VK_IMAGE_LAYOUT_GENERAL,
+				.loadOp                  = VK_ATTACHMENT_LOAD_OP_CLEAR,
+				.storeOp                 = VK_ATTACHMENT_STORE_OP_STORE,
+				.clearValue.color        = (VkClearColorValue)
+				{{
+					render_list->clear_color.r, 
+					render_list->clear_color.g, 
+					render_list->clear_color.b, 
+					1.0f
+				}},
+			},
+			.pDepthAttachment     = &(VkRenderingAttachmentInfo)
+			{
+				.sType                   = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+				.pNext                   = 0,
+				.imageView               = renderer->depth_image.view,
+				.imageLayout             = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+				.resolveMode             = VK_RESOLVE_MODE_NONE,
+				.resolveImageView        = 0,
+				.resolveImageLayout      = 0,
+				.loadOp                  = VK_ATTACHMENT_LOAD_OP_CLEAR,
+				.storeOp                 = VK_ATTACHMENT_STORE_OP_STORE,
+				.clearValue.depthStencil = (VkClearDepthStencilValue)
+				{
+					1.0f,
+					0
+				}
+			},
+			.pStencilAttachment   = 0
+		};
 
 		vkCmdBeginRendering(renderer->main_command_buffer, &render_info);
 		{
-			VkViewport viewport = {};
-			viewport.x        = 0;
-			viewport.y        = 0;
-			viewport.width    = (float)renderer->swapchain_extent.width;
-			viewport.height   = (float)renderer->swapchain_extent.height;
-			viewport.minDepth = 0;
-			viewport.maxDepth = 1;
+			VkViewport viewport = 
+			{
+				.x        = 0,
+				.y        = 0,
+				.width    = (float)renderer->swapchain_extent.width,
+				.height   = (float)renderer->swapchain_extent.height,
+				.minDepth = 0,
+				.maxDepth = 1
+			};
 			vkCmdSetViewport(renderer->main_command_buffer, 0, 1, &viewport);
 
-			VkRect2D scissor = {};
-			scissor.offset = (VkOffset2D){0, 0};
-			scissor.extent = renderer->swapchain_extent;
+			VkRect2D scissor = 
+			{
+				.offset = (VkOffset2D){0, 0},
+				.extent = renderer->swapchain_extent
+			};
 			vkCmdSetScissor(renderer->main_command_buffer, 0, 1, &scissor);
 
 			// Render world
 			// TODO - This only involves one pipeline, of course.
-			vkCmdBindPipeline(
-				renderer->main_command_buffer, 
-				VK_PIPELINE_BIND_POINT_GRAPHICS, 
-				renderer->pipelines[0].pipeline);
+			vkCmdBindPipeline(renderer->main_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, renderer->pipelines[0].pipeline);
 
 			VkDeviceSize offsets[] = {renderer->mesh_datas[0].vertex_buffer_offset};
 			vkCmdBindVertexBuffers(
@@ -935,14 +1078,16 @@ void vulkan_loop(VulkanRenderer* renderer, RenderList* render_list)
 				1, 
 				&renderer->mesh_data_memory_buffer.buffer,
 				offsets);
+
 			vkCmdBindIndexBuffer(
 				renderer->main_command_buffer, 
 				renderer->mesh_data_memory_buffer.buffer, 
 				renderer->mesh_datas[0].index_buffer_offset, 
-				VK_INDEX_TYPE_UINT16);
+				VK_INDEX_TYPE_UINT32);
 
-			for(uint16_t i = 0; i < 1; i++) {
-				uint32_t dyn_off = i * sizeof(Mat4);
+			for(uint16_t instance = 0; instance < 1; instance++) {
+				uint32_t dynamic_offset = instance * sizeof(mat4);
+
 				vkCmdBindDescriptorSets(
 					renderer->main_command_buffer, 
 					VK_PIPELINE_BIND_POINT_GRAPHICS, 
@@ -951,8 +1096,7 @@ void vulkan_loop(VulkanRenderer* renderer, RenderList* render_list)
 					1, 
 					&renderer->pipelines[0].descriptor_set,
 					1,
-					&dyn_off);
-
+					&dynamic_offset);
 				vkCmdDrawIndexed(renderer->main_command_buffer, renderer->mesh_datas[0].indices_len, 1, 0, 0, 0);
 			}
 		}
@@ -971,35 +1115,35 @@ void vulkan_loop(VulkanRenderer* renderer, RenderList* render_list)
 	}
 	vkEndCommandBuffer(renderer->main_command_buffer);
 
-	VkPipelineStageFlags wait_stages[] = 
-	{
-		VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
-	};
-
 	// We wait to submit until that images is available from before. We did all
 	// this prior stuff in the meantime, in theory.
-	VkSubmitInfo submit_info = {};
-	submit_info.sType                = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-	submit_info.waitSemaphoreCount   = 1;
-	submit_info.pWaitSemaphores      = &renderer->image_available_semaphore;
-	submit_info.pWaitDstStageMask    = wait_stages;
-	submit_info.commandBufferCount   = 1;
-	submit_info.pCommandBuffers      = &renderer->main_command_buffer;
-	submit_info.pSignalSemaphores    = &renderer->render_finished_semaphore;
-	submit_info.signalSemaphoreCount = 1;
-	vkQueueSubmit(renderer->graphics_queue, 1, &submit_info, VK_NULL_HANDLE);
+	VkSubmitInfo submit_info = 
+	{
+		.sType                = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+		.pNext                = 0,
+		.waitSemaphoreCount   = 1,
+		.pWaitSemaphores      = &renderer->image_available_semaphore,
+		.pWaitDstStageMask    = &(VkPipelineStageFlags){ VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT },
+		.commandBufferCount   = 1,
+		.pCommandBuffers      = &renderer->main_command_buffer,
+		.signalSemaphoreCount = 1,
+		.pSignalSemaphores    = &renderer->render_finished_semaphore
+	};
+	vkQueueSubmit(renderer->graphics_queue, 1, &submit_info, 0);
 
-	VkPresentInfoKHR present_info = {};
-	present_info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
-	present_info.waitSemaphoreCount = 1;
-	present_info.pWaitSemaphores = &renderer->render_finished_semaphore;
-	present_info.swapchainCount = 1;
-	present_info.pSwapchains = &renderer->swapchain;
-	present_info.pImageIndices = &image_index;
+	VkPresentInfoKHR present_info = 
+	{
+		.sType              = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+		.pNext              = 0,
+		.waitSemaphoreCount = 1,
+		.pWaitSemaphores    = &renderer->render_finished_semaphore,
+		.swapchainCount     = 1,
+		.pSwapchains        = &renderer->swapchain,
+		.pImageIndices      = &image_index,
+		.pResults           = 0
+	};
 
-	// CONSIDER - See if tracking the present queue and using that here would speed
-	// things up.
-	res = vkQueuePresentKHR(renderer->graphics_queue, &present_info); 
+	res = vkQueuePresentKHR(renderer->present_queue, &present_info); 
 	if(res == VK_ERROR_OUT_OF_DATE_KHR || res == VK_SUBOPTIMAL_KHR)
 	{
 		vulkan_initialize_swapchain(renderer, true);
