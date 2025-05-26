@@ -10,10 +10,7 @@
 #include "program.c"
 #include "render_list.c"
 
-#include "game_input.c"
-#include "game_memory.c"
-#include "game_init.c"
-#include "game_loop.c"
+#include "game.c"
 
 #define VK_USE_PLATFORM_XCB_KHR
 #include <vulkan/vulkan.h>
@@ -162,7 +159,7 @@ int32_t main(int32_t argc, char** argv)
 	xcb.memory_pool       = malloc(MEMORY_POOL_BYTES);
 	xcb.memory_pool_bytes = MEMORY_POOL_BYTES;
 
-	game_init(xcb.memory_pool, xcb.memory_pool_bytes);
+	game_initialize(xcb.memory_pool, xcb.memory_pool_bytes);
 
     if(clock_gettime(CLOCK_REALTIME, &xcb.time_prev))
     {

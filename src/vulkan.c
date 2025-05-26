@@ -136,7 +136,7 @@ void vulkan_initialize_swapchain(VulkanRenderer* renderer, bool recreate)
 		.compositeAlpha        = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
 		.presentMode           = present_mode,
 		.clipped               = VK_TRUE,
-		.oldSwapchain          = VK_NULL_HANDLE
+		.oldSwapchain          = 0
 	};
 
 	vk_verify(vkCreateSwapchainKHR(renderer->device, &swapchain_create_info, 0, &renderer->swapchain));
@@ -692,7 +692,6 @@ void vulkan_initialize_renderer(VulkanRenderer* renderer, VulkanPlatform* platfo
 		VK_FORMAT_R8G8B8A8_SRGB,
 		VK_IMAGE_ASPECT_COLOR_BIT);
 
-
 	VulkanMeshVertex vertex_hard_data[24] = 
 	{
 	    { {{{-0.5f,  0.5f, -0.5f}}}, {{{ 1.0f, 0.0f, 0.0f}}} },
@@ -813,7 +812,6 @@ void vulkan_initialize_renderer(VulkanRenderer* renderer, VulkanPlatform* platfo
 	vkFreeMemory(renderer->device, staging_memory_buffer.memory, 0);
 }
 
-// NOW - Conform to the new code style.
 void vulkan_loop(VulkanRenderer* renderer, RenderList* render_list)
 {
 	// Translate game memory to uniform buffer object memory.
@@ -829,7 +827,7 @@ void vulkan_loop(VulkanRenderer* renderer, RenderList* render_list)
 		renderer->swapchain, 
 		UINT64_MAX, 
 		renderer->image_available_semaphore, 
-		VK_NULL_HANDLE, 
+		0, 
 		&image_index);
 	if(res == VK_ERROR_OUT_OF_DATE_KHR || res == VK_SUBOPTIMAL_KHR)
 	{
@@ -837,9 +835,15 @@ void vulkan_loop(VulkanRenderer* renderer, RenderList* render_list)
 		return;
 	}
 
-	VkCommandBufferBeginInfo begin_info = {};
-	begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-	vkBeginCommandBuffer(renderer->main_command_buffer, &begin_info);
+	VkCommandBufferBeginInfo command_buffer_begin_info = 
+	{
+		.sType            = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+		.pNext            = 0,
+		.flags            = 0,
+		.pInheritanceInfo = 0
+	};
+
+	vkBeginCommandBuffer(renderer->main_command_buffer, &command_buffer_begin_info);
 	{
 		// Render image transfer
 		vulkan_image_memory_barrier(
@@ -852,6 +856,7 @@ void vulkan_loop(VulkanRenderer* renderer, RenderList* render_list)
 			VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
 			VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
 			VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+
 		// Depth image transfer
 		vulkan_image_memory_barrier(
 			renderer->main_command_buffer, 
@@ -864,69 +869,74 @@ void vulkan_loop(VulkanRenderer* renderer, RenderList* render_list)
 			VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
 			VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT);
 
-		VkRenderingAttachmentInfo color_attachment = {};
-		color_attachment.sType              = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-		color_attachment.loadOp             = VK_ATTACHMENT_LOAD_OP_CLEAR;
-		color_attachment.storeOp            = VK_ATTACHMENT_STORE_OP_STORE;
-		color_attachment.imageLayout        = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-		color_attachment.imageView          = renderer->render_image.view;
-		color_attachment.resolveMode        = VK_RESOLVE_MODE_AVERAGE_BIT;
-		color_attachment.resolveImageView   = renderer->swapchain_image_views[image_index];
-		color_attachment.resolveImageLayout = VK_IMAGE_LAYOUT_GENERAL;
-		color_attachment.clearValue.color   = 
-			(VkClearColorValue)
-			{{
-				render_list->clear_color.r, 
-				render_list->clear_color.g, 
-				render_list->clear_color.b, 
-				1.0f
-			}};
-
-		VkRenderingAttachmentInfo depth_attachment = {};
-		depth_attachment.sType                   = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-		depth_attachment.loadOp                  = VK_ATTACHMENT_LOAD_OP_CLEAR;
-		depth_attachment.storeOp                 = VK_ATTACHMENT_STORE_OP_STORE;
-		depth_attachment.imageLayout             = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-		depth_attachment.imageView               = renderer->depth_image.view;
-		depth_attachment.resolveMode             = VK_RESOLVE_MODE_NONE;
-		depth_attachment.clearValue.depthStencil = 
-			(VkClearDepthStencilValue)
+		VkRenderingInfo render_info = 
+		{
+			.sType                = VK_STRUCTURE_TYPE_RENDERING_INFO,
+			.renderArea           = (VkRect2D){{0, 0}, renderer->swapchain_extent},
+			.layerCount           = 1,
+			.colorAttachmentCount = 1,
+			.pColorAttachments    = &(VkRenderingAttachmentInfo)
 			{
-				1.0f,
-				0
-			};
-
-		VkRenderingInfo render_info = {};
-		render_info.sType                = VK_STRUCTURE_TYPE_RENDERING_INFO;
-		render_info.renderArea           = (VkRect2D){{0, 0}, renderer->swapchain_extent};
-		render_info.layerCount           = 1;
-		render_info.colorAttachmentCount = 1;
-		render_info.pColorAttachments    = &color_attachment;
-		render_info.pDepthAttachment     = &depth_attachment;
-		render_info.pStencilAttachment   = 0;
+				.sType                   = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+				.pNext                   = 0,
+				.imageView               = renderer->render_image.view,
+				.imageLayout             = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+				.resolveMode             = VK_RESOLVE_MODE_AVERAGE_BIT,
+				.resolveImageView        = renderer->swapchain_image_views[image_index],
+				.resolveImageLayout      = VK_IMAGE_LAYOUT_GENERAL,
+				.loadOp                  = VK_ATTACHMENT_LOAD_OP_CLEAR,
+				.storeOp                 = VK_ATTACHMENT_STORE_OP_STORE,
+				.clearValue.color        = (VkClearColorValue)
+				{{
+					render_list->clear_color.r, 
+					render_list->clear_color.g, 
+					render_list->clear_color.b, 
+					1.0f
+				}},
+			},
+			.pDepthAttachment     = &(VkRenderingAttachmentInfo)
+			{
+				.sType                   = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+				.pNext                   = 0,
+				.imageView               = renderer->depth_image.view,
+				.imageLayout             = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+				.resolveMode             = VK_RESOLVE_MODE_NONE,
+				.resolveImageView        = 0,
+				.resolveImageLayout      = 0,
+				.loadOp                  = VK_ATTACHMENT_LOAD_OP_CLEAR,
+				.storeOp                 = VK_ATTACHMENT_STORE_OP_STORE,
+				.clearValue.depthStencil = (VkClearDepthStencilValue)
+				{
+					1.0f,
+					0
+				}
+			},
+			.pStencilAttachment   = 0
+		};
 
 		vkCmdBeginRendering(renderer->main_command_buffer, &render_info);
 		{
-			VkViewport viewport = {};
-			viewport.x        = 0;
-			viewport.y        = 0;
-			viewport.width    = (float)renderer->swapchain_extent.width;
-			viewport.height   = (float)renderer->swapchain_extent.height;
-			viewport.minDepth = 0;
-			viewport.maxDepth = 1;
+			VkViewport viewport = 
+			{
+				.x        = 0,
+				.y        = 0,
+				.width    = (float)renderer->swapchain_extent.width,
+				.height   = (float)renderer->swapchain_extent.height,
+				.minDepth = 0,
+				.maxDepth = 1
+			};
 			vkCmdSetViewport(renderer->main_command_buffer, 0, 1, &viewport);
 
-			VkRect2D scissor = {};
-			scissor.offset = (VkOffset2D){0, 0};
-			scissor.extent = renderer->swapchain_extent;
+			VkRect2D scissor = 
+			{
+				.offset = (VkOffset2D){0, 0},
+				.extent = renderer->swapchain_extent
+			};
 			vkCmdSetScissor(renderer->main_command_buffer, 0, 1, &scissor);
 
 			// Render world
 			// TODO - This only involves one pipeline, of course.
-			vkCmdBindPipeline(
-				renderer->main_command_buffer, 
-				VK_PIPELINE_BIND_POINT_GRAPHICS, 
-				renderer->pipelines[0].pipeline);
+			vkCmdBindPipeline(renderer->main_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, renderer->pipelines[0].pipeline);
 
 			VkDeviceSize offsets[] = {renderer->mesh_datas[0].vertex_buffer_offset};
 			vkCmdBindVertexBuffers(
@@ -935,6 +945,7 @@ void vulkan_loop(VulkanRenderer* renderer, RenderList* render_list)
 				1, 
 				&renderer->mesh_data_memory_buffer.buffer,
 				offsets);
+
 			vkCmdBindIndexBuffer(
 				renderer->main_command_buffer, 
 				renderer->mesh_data_memory_buffer.buffer, 
@@ -942,7 +953,8 @@ void vulkan_loop(VulkanRenderer* renderer, RenderList* render_list)
 				VK_INDEX_TYPE_UINT16);
 
 			for(uint16_t i = 0; i < 1; i++) {
-				uint32_t dyn_off = i * sizeof(Mat4);
+				uint32_t dynamic_offset = i * sizeof(Mat4);
+
 				vkCmdBindDescriptorSets(
 					renderer->main_command_buffer, 
 					VK_PIPELINE_BIND_POINT_GRAPHICS, 
@@ -951,8 +963,7 @@ void vulkan_loop(VulkanRenderer* renderer, RenderList* render_list)
 					1, 
 					&renderer->pipelines[0].descriptor_set,
 					1,
-					&dyn_off);
-
+					&dynamic_offset);
 				vkCmdDrawIndexed(renderer->main_command_buffer, renderer->mesh_datas[0].indices_len, 1, 0, 0, 0);
 			}
 		}
@@ -971,35 +982,35 @@ void vulkan_loop(VulkanRenderer* renderer, RenderList* render_list)
 	}
 	vkEndCommandBuffer(renderer->main_command_buffer);
 
-	VkPipelineStageFlags wait_stages[] = 
-	{
-		VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
-	};
-
 	// We wait to submit until that images is available from before. We did all
 	// this prior stuff in the meantime, in theory.
-	VkSubmitInfo submit_info = {};
-	submit_info.sType                = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-	submit_info.waitSemaphoreCount   = 1;
-	submit_info.pWaitSemaphores      = &renderer->image_available_semaphore;
-	submit_info.pWaitDstStageMask    = wait_stages;
-	submit_info.commandBufferCount   = 1;
-	submit_info.pCommandBuffers      = &renderer->main_command_buffer;
-	submit_info.pSignalSemaphores    = &renderer->render_finished_semaphore;
-	submit_info.signalSemaphoreCount = 1;
-	vkQueueSubmit(renderer->graphics_queue, 1, &submit_info, VK_NULL_HANDLE);
+	VkSubmitInfo submit_info = 
+	{
+		.sType                = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+		.pNext                = 0,
+		.waitSemaphoreCount   = 1,
+		.pWaitSemaphores      = &renderer->image_available_semaphore,
+		.pWaitDstStageMask    = &(VkPipelineStageFlags){ VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT },
+		.commandBufferCount   = 1,
+		.pCommandBuffers      = &renderer->main_command_buffer,
+		.signalSemaphoreCount = 1,
+		.pSignalSemaphores    = &renderer->render_finished_semaphore
+	};
+	vkQueueSubmit(renderer->graphics_queue, 1, &submit_info, 0);
 
-	VkPresentInfoKHR present_info = {};
-	present_info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
-	present_info.waitSemaphoreCount = 1;
-	present_info.pWaitSemaphores = &renderer->render_finished_semaphore;
-	present_info.swapchainCount = 1;
-	present_info.pSwapchains = &renderer->swapchain;
-	present_info.pImageIndices = &image_index;
+	VkPresentInfoKHR present_info = 
+	{
+		.sType              = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+		.pNext              = 0,
+		.waitSemaphoreCount = 1,
+		.pWaitSemaphores    = &renderer->render_finished_semaphore,
+		.swapchainCount     = 1,
+		.pSwapchains        = &renderer->swapchain,
+		.pImageIndices      = &image_index,
+		.pResults           = 0
+	};
 
-	// CONSIDER - See if tracking the present queue and using that here would speed
-	// things up.
-	res = vkQueuePresentKHR(renderer->graphics_queue, &present_info); 
+	res = vkQueuePresentKHR(renderer->present_queue, &present_info); 
 	if(res == VK_ERROR_OUT_OF_DATE_KHR || res == VK_SUBOPTIMAL_KHR)
 	{
 		vulkan_initialize_swapchain(renderer, true);
