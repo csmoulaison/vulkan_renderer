@@ -8,6 +8,7 @@ LIBS="-lX11 -lX11-xcb -lm -lxcb -lxcb-xfixes -lxcb-keysyms -lvulkan"
 FLAGS="-g -Wall"
 
 sh compile_shaders.sh
+cp assets $BUILD_BIN_DIR/ -r
 
 # Executable compilation
 printf "Compiling executable...\n"
@@ -20,3 +21,4 @@ if [ $? -eq 0 ]; then
 else
 	exit 1
 fi
+
