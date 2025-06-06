@@ -45,11 +45,14 @@ typedef struct
 	Vec2 texture_uv;
 } VulkanMeshVertex;
 
+// NOW - this might be good as is, but remember that its been renamed and changed to only include
+// data which is used at loop time, as opposed to that needed during initialization.
+// 
+// This is the final result of loading a mesh, in other words. The only thing we need to do is make
+// sure all of this data is actually used at loop time, and if not, only store it transiently during
+// initialization (as part of VulkanMeshData, perhaps).
 typedef struct
 {
-	void*    vertex_memory;
-	void*    index_memory;
-
 	// In bytes
 	// TODO - this obviously shouldn't be defined for every mesh.
 	uint32_t vertex_data_stride;
@@ -60,7 +63,7 @@ typedef struct
 	// TODO - Will be used for when multiple meshes.
 	uint32_t vertex_buffer_offset;
 	uint32_t index_buffer_offset;
-} VulkanMeshData;
+} VulkanAllocatedMesh;
 
 typedef struct 
 {
@@ -92,10 +95,10 @@ typedef struct
 	VulkanPipeline        pipelines[PIPELINES_COUNT];
 	VkSampler             texture_sampler;
 
-	VulkanMeshData        mesh_datas[1];
+	VulkanAllocatedMesh   mesh_datas[1];
 	VulkanMemoryBuffer    mesh_data_memory_buffer;
 
-	// CONSIDER - Ought this be part of VulkanMeshData?
+	// CONSIDER - Ought this be part of VulkanAllocatedMesh?
 	VulkanAllocatedImage  texture_images[1];
 
 	VulkanMemoryBuffer    host_mapped_buffer;

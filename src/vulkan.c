@@ -713,9 +713,6 @@ void vulkan_initialize_renderer(VulkanRenderer* renderer, VulkanPlatform* platfo
 		panic();
 	}
 
-	// NOW - On to -> multiple models! First, sort out which bits of the code reference only the one
-	// model, and if we know how, change those bits to allow for multiple.
-
 	// Load .obj model.
 	// 
 	// The tricky thing about .obj is texture UVs being defined per index buffer vertex, as opposted
@@ -723,89 +720,29 @@ void vulkan_initialize_renderer(VulkanRenderer* renderer, VulkanPlatform* platfo
 	// 
 	// To fix this, we'll apply the proper UVs and whatnot to the vertex buffer vertices retroactively,
 	// as we are iterating our way through the faces.
-	VulkanMeshVertex vertices[8000];
-	uint32_t         vertices_len = 0;
-	Vec2     tmp_texture_uvs[8000];
-	uint32_t tmp_texture_uvs_len = 0;
 
-	// Note that tmp_face_elements do not correspond with "f" records, but rather with one of the
-	// elements in those records.
-	struct 
+	uint8_t meshes_len = 2;
+	struct
 	{
-		uint32_t vertex_index;
-		uint32_t texture_uv_index;
-	} tmp_face_elements[32000];
-	uint32_t tmp_face_elements_len = 0;
-
-	while(true)
+		char* mesh;
+		char* texture;
+	} 
+	mesh_filenames[2] = 
 	{
-		char keyword[128];
-		int32_t res = fscanf(file, "%s", keyword);
-
-		if(res == EOF)
 		{
-			break;
-		}
-
-		if(strcmp(keyword, "v") == 0)
+			.mesh    = "assets/viking_room.obj",
+			.texture = "assets/viking_room.bmp"
+		},
 		{
-			Vec3* pos = &vertices[vertices_len].position;
-			fscanf(file, "%f %f %f", &pos->x, &pos->y, &pos->z);
-			vertices_len++;
-		}
-		else if(strcmp(keyword, "vt") == 0)
-		{
-			Vec2* tmp_texture_uv = &tmp_texture_uvs[tmp_texture_uvs_len];
-			fscanf(file, "%f %f", &tmp_texture_uv->x, &tmp_texture_uv->y);
-			tmp_texture_uv->y = 1 - tmp_texture_uv->y;
-			tmp_texture_uvs_len++;
-		}
-		else if(strcmp(keyword, "f") == 0)
-		{
-			int32_t throwaways[3];
-			int32_t values_len = fscanf(file, "%d/%d/%d %d/%d/%d %d/%d/%d\n", 
-				&tmp_face_elements[tmp_face_elements_len + 0].vertex_index, 
-				&tmp_face_elements[tmp_face_elements_len + 0].texture_uv_index, 
-				&throwaways[0], 
-				&tmp_face_elements[tmp_face_elements_len + 1].vertex_index, 
-				&tmp_face_elements[tmp_face_elements_len + 1].texture_uv_index, 
-				&throwaways[1], 
-				&tmp_face_elements[tmp_face_elements_len + 2].vertex_index, 
-				&tmp_face_elements[tmp_face_elements_len + 2].texture_uv_index, 
-				&throwaways[2]);
-
-			if(values_len != 9)
-			{
-				panic();
-			}
-			tmp_face_elements_len += 3;
+			.mesh    = "assets/viking_room.obj",
+			.texture = "assets/viking_room.bmp"
 		}
 	}
-	fclose(file);
 
-	uint32_t         indices [32000];
-	uint32_t         indices_len  = 0;
-	for(uint32_t element_index = 0; element_index < tmp_face_elements_len; element_index++)
+	// NOW - vulkan_load_mesh calls instead of loop, etc.
+	for(uint8_t mesh_index = 0; mesh_index < meshes_len; mesh_index++)
 	{
-		uint32_t index = tmp_face_elements[element_index].vertex_index - 1;
-		indices[element_index] = index;
-		vertices[index].texture_uv = tmp_texture_uvs[tmp_face_elements[element_index].texture_uv_index - 1];
-
-		indices_len++;
 	}
-
-	// Allocate device local memory buffer
-	// 
-	// TODO - This assumes only one mesh.
-	uint8_t meshes_len = 1;
-	renderer->mesh_datas[0] = (VulkanMeshData)
-	{
-		.vertex_memory      = (void*)vertices,
-		.index_memory       = (void*)indices,
-		.vertex_data_stride = sizeof(VulkanMeshVertex),
-		.vertices_len       = vertices_len,
-		.indices_len        = indices_len
-	};
 
 	size_t mesh_vertex_buffer_sizes[meshes_len];
 	size_t mesh_index_buffer_sizes [meshes_len];
