@@ -713,6 +713,8 @@ void vulkan_initialize_renderer(VulkanRenderer* renderer, VulkanPlatform* platfo
 		panic();
 	}
 
+	// NOW - On to -> multiple models! First, sort out which bits of the code reference only the one
+	// model, and if we know how, change those bits to allow for multiple.
 
 	// Load .obj model.
 	// 
@@ -721,10 +723,9 @@ void vulkan_initialize_renderer(VulkanRenderer* renderer, VulkanPlatform* platfo
 	// 
 	// To fix this, we'll apply the proper UVs and whatnot to the vertex buffer vertices retroactively,
 	// as we are iterating our way through the faces.
-
-	Vec3 tmp_vertices   [8000];
-	uint32_t tmp_vertices_len    = 0;
-	Vec2 tmp_texture_uvs[8000];
+	VulkanMeshVertex vertices[8000];
+	uint32_t         vertices_len = 0;
+	Vec2     tmp_texture_uvs[8000];
 	uint32_t tmp_texture_uvs_len = 0;
 
 	// Note that tmp_face_elements do not correspond with "f" records, but rather with one of the
@@ -748,9 +749,9 @@ void vulkan_initialize_renderer(VulkanRenderer* renderer, VulkanPlatform* platfo
 
 		if(strcmp(keyword, "v") == 0)
 		{
-			Vec3* tmp_vertex = &tmp_vertices[tmp_vertices_len];
-			fscanf(file, "%f %f %f", &tmp_vertex->x, &tmp_vertex->y, &tmp_vertex->z);
-			tmp_vertices_len++;
+			Vec3* pos = &vertices[vertices_len].position;
+			fscanf(file, "%f %f %f", &pos->x, &pos->y, &pos->z);
+			vertices_len++;
 		}
 		else if(strcmp(keyword, "vt") == 0)
 		{
@@ -758,7 +759,6 @@ void vulkan_initialize_renderer(VulkanRenderer* renderer, VulkanPlatform* platfo
 			fscanf(file, "%f %f", &tmp_texture_uv->x, &tmp_texture_uv->y);
 			tmp_texture_uv->y = 1 - tmp_texture_uv->y;
 			tmp_texture_uvs_len++;
-
 		}
 		else if(strcmp(keyword, "f") == 0)
 		{
@@ -772,8 +772,8 @@ void vulkan_initialize_renderer(VulkanRenderer* renderer, VulkanPlatform* platfo
 				&throwaways[1], 
 				&tmp_face_elements[tmp_face_elements_len + 2].vertex_index, 
 				&tmp_face_elements[tmp_face_elements_len + 2].texture_uv_index, 
-				&throwaways[2]
-			);
+				&throwaways[2]);
+
 			if(values_len != 9)
 			{
 				panic();
@@ -781,31 +781,8 @@ void vulkan_initialize_renderer(VulkanRenderer* renderer, VulkanPlatform* platfo
 			tmp_face_elements_len += 3;
 		}
 	}
-
 	fclose(file);
 
-
-	// NOW - we are just overwriting texture uv information here.
-	// NOW - vertices_len and in fact tmp_vertices not required, yeah?
-	// 
-	// Now's the time to actually sort this out. Collapse this code one bit at a time.
-	// 
-	// TODO - After figuring out the top two items, it's on to -> multiple models!
-	// - First, sort out which bits of the code reference only the one model, and if we know how, change
-	// those bits to allow for multiple.
-	// 
-	// TODO - After that, we want to pull out of here and work on the open GL implementation, with the
-	// goal of atomizing the functions of both GL and Vulkan sufficiently to develop a robust renderer
-	// front-end. The ideal of the split is to conserve all possible performance characteristics of
-	// each API while minimizing the redundancy in the two implementations.
-	VulkanMeshVertex vertices[8000];
-	uint32_t         vertices_len = 0;
-	for(uint32_t vertex_index = 0; vertex_index < tmp_vertices_len; vertex_index++)
-	{
-		vertices[vertex_index].position = tmp_vertices[vertex_index];
-		vertices_len++;
-	}
-	
 	uint32_t         indices [32000];
 	uint32_t         indices_len  = 0;
 	for(uint32_t element_index = 0; element_index < tmp_face_elements_len; element_index++)
@@ -816,62 +793,6 @@ void vulkan_initialize_renderer(VulkanRenderer* renderer, VulkanPlatform* platfo
 
 		indices_len++;
 	}
-
-	/*
-	VulkanMeshVertex vertex_hard_data[24] = 
-	{
-	    { {{{-0.5f,  0.5f, -0.5f}}}, {{{ 1.0, 0.0f }}} },
-	    { {{{ 0.5f,  0.5f, -0.5f}}}, {{{ 0.0, 0.0f }}} },
-	    { {{{ 0.5f, -0.5f, -0.5f}}}, {{{ 0.0, 1.0f }}} },
-	    { {{{-0.5f, -0.5f, -0.5f}}}, {{{ 1.0, 1.0f }}} }, 
-
-	    { {{{-0.5f, -0.5f,  0.5f}}}, {{{ 1.0, 0.0f }}}  },
-	    { {{{ 0.5f, -0.5f,  0.5f}}}, {{{ 0.0, 0.0f }}}  },
-	    { {{{ 0.5f,  0.5f,  0.5f}}}, {{{ 0.0, 1.0f }}}  },
-	    { {{{-0.5f,  0.5f,  0.5f}}}, {{{ 1.0, 1.0f }}}  },
-
-	    { {{{-0.5f,  0.5f,  0.5f}}}, {{{ 1.0, 0.0f }}}  },
-	    { {{{-0.5f,  0.5f, -0.5f}}}, {{{ 0.0, 0.0f }}}  },
-	    { {{{-0.5f, -0.5f, -0.5f}}}, {{{ 0.0, 1.0f }}}  },
-	    { {{{-0.5f, -0.5f,  0.5f}}}, {{{ 1.0, 1.0f }}}  },
-
-	    { {{{ 0.5f, -0.5f,  0.5f}}}, {{{ 1.0, 0.0f }}}  },
-	    { {{{ 0.5f, -0.5f, -0.5f}}}, {{{ 0.0, 0.0f }}}  },
-	    { {{{ 0.5f,  0.5f, -0.5f}}}, {{{ 0.0, 1.0f }}}  },
-	    { {{{ 0.5f,  0.5f,  0.5f}}}, {{{ 1.0, 1.0f }}}  },
-
-	    { {{{-0.5f, -0.5f, -0.5f}}}, {{{ 1.0, 0.0f }}}  },
-	    { {{{ 0.5f, -0.5f, -0.5f}}}, {{{ 0.0, 0.0f }}}  },
-	    { {{{ 0.5f, -0.5f,  0.5f}}}, {{{ 0.0, 1.0f }}}  },
-	    { {{{-0.5f, -0.5f,  0.5f}}}, {{{ 1.0, 1.0f }}}  },
-
-	    { {{{-0.5f,  0.5f,  0.5f}}}, {{{ 1.0, 0.0f }}} },
-	    { {{{ 0.5f,  0.5f,  0.5f}}}, {{{ 0.0, 0.0f }}} },
-	    { {{{ 0.5f,  0.5f, -0.5f}}}, {{{ 0.0, 1.0f }}} },
-	    { {{{-0.5f,  0.5f, -0.5f}}}, {{{ 1.0, 1.0f }}} }
-	};
-
-	uint16_t index_hard_data[36] = 
-	{
-		0, 1, 2, 
-		2, 3, 0,
-
-		4, 5, 6, 
-		6, 7, 4,
-
-		8,  9,  10, 
-		10, 11, 8,
-
-		12, 13, 14, 
-		14, 15, 12,
-
-		16, 17, 18, 
-		18, 19, 16,
-
-		20, 21, 22, 
-		22, 23, 20,
-	};
-	*/
 
 	// Allocate device local memory buffer
 	// 

@@ -342,7 +342,10 @@ int32_t main(int32_t argc, char** argv)
     		&xcb.input,
     		&xcb.render_list);
 
-		//xcb.render_list.t = xcb.time_since_start / 4.0f;
+		// TODO - Open GL implementation + renderer front end, with the goal of atomizing the functions
+		// of both GL and Vulkan sufficiently to develop a robust renderer front-end. The ideal of the
+		// split is to conserve all possible performance characteristics of each API while minimizing the
+		// redundancy in the two implementations.
 		vulkan_loop(&xcb.renderer, &xcb.render_list);
 	}
 
