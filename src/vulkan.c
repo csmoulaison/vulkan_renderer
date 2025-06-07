@@ -3,7 +3,8 @@
 #define PIPELINES_COUNT        1
 #define MESHES_COUNT           1
 #define SWAPCHAIN_IMAGES_COUNT 4
-#define INSTANCES_COUNT        4
+// NOW - instances_count will equal 2 for more meshes, of course.
+#define INSTANCES_COUNT        1
 
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_ONLY_BMP
@@ -19,6 +20,7 @@
 #include "vulkan_transient_commands.c"
 #include "vulkan_image_memory_barrier.c"
 #include "vulkan_image_view.c"
+#include "vulkan_mesh.c"
 #include "vulkan_pipeline.c"
 
 typedef struct
@@ -707,56 +709,28 @@ void vulkan_initialize_renderer(VulkanRenderer* renderer, VulkanPlatform* platfo
 		2,
 		sizeof(VulkanMeshVertex));
 
-	FILE* file = fopen("assets/viking_room.obj", "r");
-	if(file == NULL)
-	{
-		panic();
-	}
-
-	// Load .obj model.
-	// 
-	// The tricky thing about .obj is texture UVs being defined per index buffer vertex, as opposted
-	// to being defined per vertex buffer vertex, you see.
-	// 
-	// To fix this, we'll apply the proper UVs and whatnot to the vertex buffer vertices retroactively,
-	// as we are iterating our way through the faces.
-
 	uint8_t meshes_len = 2;
-	struct
-	{
-		char* mesh;
-		char* texture;
-	} 
-	mesh_filenames[2] = 
-	{
-		{
-			.mesh    = "assets/viking_room.obj",
-			.texture = "assets/viking_room.bmp"
-		},
-		{
-			.mesh    = "assets/viking_room.obj",
-			.texture = "assets/viking_room.bmp"
-		}
-	}
-
-	// NOW - vulkan_load_mesh calls instead of loop, etc.
-	for(uint8_t mesh_index = 0; mesh_index < meshes_len; mesh_index++)
-	{
-	}
-
+	staging_buffer_size = 0;
 	size_t mesh_vertex_buffer_sizes[meshes_len];
 	size_t mesh_index_buffer_sizes [meshes_len];
+	VulkanMeshData mesh_datas[meshes_len];
 
-	staging_buffer_size = 0;
-	for(uint8_t i = 0; i < meshes_len; i++)
+	for(uint8_t mesh_index = 0; mesh_index < meshes_len; mesh_index++)
 	{
-		mesh_vertex_buffer_sizes[i]  = renderer->mesh_datas[i].vertex_data_stride * renderer->mesh_datas[i].vertices_len;
-		mesh_index_buffer_sizes[i]   = sizeof(uint32_t)                           * renderer->mesh_datas[i].indices_len;
+		VulkanMeshData* data = &mesh_datas[mesh_index];
+		vulkan_load_mesh(data, "assets/viking_room.obj");
 
-		renderer->mesh_datas[i].vertex_buffer_offset = staging_buffer_size;
-		renderer->mesh_datas[i].index_buffer_offset  = staging_buffer_size + mesh_vertex_buffer_sizes[i];
+		VulkanAllocatedMesh* mesh = &renderer->allocated_meshes[mesh_index];
+		mesh->vertices_len = data->vertices_len;
+		mesh->indices_len  = data->indices_len;
+
+		mesh_vertex_buffer_sizes[mesh_index] = MESH_VERTEX_STRIDE * mesh->vertices_len;
+		mesh_index_buffer_sizes[mesh_index]  = sizeof(uint32_t)   * mesh->indices_len;
+
+		mesh->vertex_buffer_offset = staging_buffer_size;
+		mesh->index_buffer_offset = staging_buffer_size + mesh_vertex_buffer_sizes[mesh_index];
 		
-		staging_buffer_size += mesh_vertex_buffer_sizes[i] + mesh_index_buffer_sizes[i];
+		staging_buffer_size += mesh_vertex_buffer_sizes[mesh_index] + mesh_index_buffer_sizes[mesh_index];
 	}
 
 	vulkan_allocate_memory_buffer(
@@ -769,11 +743,14 @@ void vulkan_initialize_renderer(VulkanRenderer* renderer, VulkanPlatform* platfo
 	vkMapMemory(renderer->device, staging_memory_buffer.memory, 0, staging_buffer_size, 0, &mapped_buffer_data);
 	{
 		size_t total_offset = 0;
-		for(uint8_t i = 0; i < meshes_len; i++)
+		for(uint8_t mesh_index = 0; mesh_index < meshes_len; mesh_index++)
 		{
-			memcpy(mapped_buffer_data + renderer->mesh_datas[i].vertex_buffer_offset, renderer->mesh_datas[i].vertex_memory, mesh_vertex_buffer_sizes[i]);
-			memcpy(mapped_buffer_data + renderer->mesh_datas[i].index_buffer_offset,  renderer->mesh_datas[i].index_memory,  mesh_index_buffer_sizes[i]);
-			total_offset += mesh_vertex_buffer_sizes[i] + mesh_index_buffer_sizes[i];
+			VulkanAllocatedMesh* mesh = &renderer->allocated_meshes[mesh_index];
+			VulkanMeshData*      data = &mesh_datas[mesh_index];
+
+			memcpy(mapped_buffer_data + mesh->vertex_buffer_offset, data->vertices, mesh_vertex_buffer_sizes[mesh_index]);
+			memcpy(mapped_buffer_data + mesh->index_buffer_offset,  data->indices,  mesh_index_buffer_sizes[mesh_index]);
+			total_offset += mesh_vertex_buffer_sizes[mesh_index] + mesh_index_buffer_sizes[mesh_index];
 		}
 	}
 	vkUnmapMemory(renderer->device, staging_memory_buffer.memory);
@@ -929,7 +906,7 @@ void vulkan_loop(VulkanRenderer* renderer, RenderList* render_list)
 			// TODO - This only involves one pipeline, of course.
 			vkCmdBindPipeline(renderer->main_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, renderer->pipelines[0].pipeline);
 
-			VkDeviceSize offsets[] = {renderer->mesh_datas[0].vertex_buffer_offset};
+			VkDeviceSize offsets[] = {renderer->allocated_meshes[0].vertex_buffer_offset};
 			vkCmdBindVertexBuffers(
 				renderer->main_command_buffer, 
 				0, 
@@ -940,7 +917,7 @@ void vulkan_loop(VulkanRenderer* renderer, RenderList* render_list)
 			vkCmdBindIndexBuffer(
 				renderer->main_command_buffer, 
 				renderer->mesh_data_memory_buffer.buffer, 
-				renderer->mesh_datas[0].index_buffer_offset, 
+				renderer->allocated_meshes[0].index_buffer_offset, 
 				VK_INDEX_TYPE_UINT32);
 
 			for(uint16_t instance = 0; instance < 1; instance++) {
@@ -955,7 +932,7 @@ void vulkan_loop(VulkanRenderer* renderer, RenderList* render_list)
 					&renderer->pipelines[0].descriptor_set,
 					1,
 					&dynamic_offset);
-				vkCmdDrawIndexed(renderer->main_command_buffer, renderer->mesh_datas[0].indices_len, 1, 0, 0, 0);
+				vkCmdDrawIndexed(renderer->main_command_buffer, renderer->allocated_meshes[0].indices_len, 1, 0, 0, 0);
 			}
 		}
 		vkCmdEndRendering(renderer->main_command_buffer);

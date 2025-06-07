@@ -53,10 +53,6 @@ typedef struct
 // initialization (as part of VulkanMeshData, perhaps).
 typedef struct
 {
-	// In bytes
-	// TODO - this obviously shouldn't be defined for every mesh.
-	uint32_t vertex_data_stride;
-
 	uint32_t vertices_len;
 	uint32_t indices_len;
 
@@ -95,7 +91,7 @@ typedef struct
 	VulkanPipeline        pipelines[PIPELINES_COUNT];
 	VkSampler             texture_sampler;
 
-	VulkanAllocatedMesh   mesh_datas[1];
+	VulkanAllocatedMesh   allocated_meshes[1];
 	VulkanMemoryBuffer    mesh_data_memory_buffer;
 
 	// CONSIDER - Ought this be part of VulkanAllocatedMesh?

@@ -54,6 +54,7 @@ void game_loop(
     }
     //glm_rotate(game->cube_orientation, dt * radians(30), game->cube_rotation_per_frame.data);
 
+	// NOW - define another transform on GameMemory -> define on RenderList -> define on UBO
     mat4 cube_transform;
     glm_mat4_identity(cube_transform);
     glm_translate(cube_transform, game->cube_position.data);
