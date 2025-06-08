@@ -772,7 +772,6 @@ void vulkan_initialize(VulkanContext* ctx, VulkanPlatform* platform)
 	vkFreeMemory(ctx->device, staging_memory_buffer.memory, 0);
 }
 
-// NOW - what does vulkan know about? what is the render list?
 void vulkan_loop(VulkanContext* ctx, RenderList* render_list)
 {
 	// Translate game memory to uniform buffer object memory.
@@ -929,7 +928,8 @@ void vulkan_loop(VulkanContext* ctx, RenderList* render_list)
 				ctx->allocated_meshes[0].index_buffer_offset, 
 				VK_INDEX_TYPE_UINT32);
 
-			for(uint16_t instance = 0; instance < 1; instance++) {
+			for(uint16_t instance = 0; instance < STATIC_MESHES_LEN; instance++) 
+			{
 				uint32_t dynamic_offset = instance * sizeof(mat4);
 
 				vkCmdBindDescriptorSets(

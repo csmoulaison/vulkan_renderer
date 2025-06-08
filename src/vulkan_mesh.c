@@ -15,15 +15,6 @@ typedef struct
 	uint32_t         indices_len;
 } VulkanMeshData;
 
-// NOW - vulkan_load_mesh needs to get reimplemented properly here.
-// The main idea is that we are getting all of the info which can be gleaned from the .obj file.
-// A good way of scoping this is to not require any context from the VulkanRenderer if possible.
-// Eventually, the renderer will be using this data in a way which might be dynamically messing with
-// memory at runtime, and this might be API dependant, so shouldn't be considered here.
-//
-// That is, because this vulkan_load_mesh function and indeed VulkanMeshData struct is probably
-// going to emerge unscathed in all but name as a part of the renderer front end, at least until we
-// move away from the .obj format.
 void vulkan_load_mesh(VulkanMeshData* data, char* mesh_filename)
 {
 	FILE* file = fopen(mesh_filename, "r");
