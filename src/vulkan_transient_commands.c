@@ -1,17 +1,16 @@
-VkCommandBuffer vulkan_start_transient_commands(
-	VulkanRenderer* renderer)
+VkCommandBuffer vulkan_start_transient_commands(VulkanContext*  ctx)
 {
 	VkCommandBufferAllocateInfo allocate_info = 
 	{
 		.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
 		.pNext              = 0,
-		.commandPool        = renderer->command_pool,
+		.commandPool        = ctx->command_pool,
 		.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
 		.commandBufferCount = 1
 	};
 
 	VkCommandBuffer command_buffer;
-	vkAllocateCommandBuffers(renderer->device, &allocate_info, &command_buffer);
+	vkAllocateCommandBuffers(ctx->device, &allocate_info, &command_buffer);
 
 	VkCommandBufferBeginInfo begin_info = 
 	{
@@ -25,10 +24,7 @@ VkCommandBuffer vulkan_start_transient_commands(
 	return command_buffer;
 }
 
-void vulkan_end_transient_commands(
-	VulkanRenderer* renderer,
-	VkCommandBuffer command_buffer,
-	VkQueue         submission_queue)
+void vulkan_end_transient_commands(VulkanContext* ctx, VkCommandBuffer command_buffer, VkQueue submission_queue)
 {
 	vkEndCommandBuffer(command_buffer);
 
@@ -55,5 +51,5 @@ void vulkan_end_transient_commands(
 	vkQueueSubmit(submission_queue, 1, &submit_info, 0);
 	vkQueueWaitIdle(submission_queue);
 
-	vkFreeCommandBuffers(renderer->device, renderer->command_pool, 1, &command_buffer);
+	vkFreeCommandBuffers(ctx->device, ctx->command_pool, 1, &command_buffer);
 }

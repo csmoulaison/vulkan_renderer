@@ -12,7 +12,7 @@ typedef struct
 	uint32_t offset_in_vertex_data;
 } VulkanVertexInputAttributeConfig;
 
-VkShaderModule vulkan_create_shader_module(VulkanRenderer* renderer, char* filename)
+VkShaderModule vulkan_create_shader_module(VulkanContext* ctx, char* filename)
 {
 	FILE* file = fopen(filename, "r");
 	if(!file)
@@ -44,13 +44,13 @@ VkShaderModule vulkan_create_shader_module(VulkanRenderer* renderer, char* filen
 	};
 
 	VkShaderModule module;
-	vk_verify(vkCreateShaderModule(renderer->device, &shader_module_create_info, 0, &module));
+	vk_verify(vkCreateShaderModule(ctx->device, &shader_module_create_info, 0, &module));
 	
 	return module;
 }
 
 void vulkan_create_graphics_pipeline(
-	VulkanRenderer*                   renderer,
+	VulkanContext*                    ctx,
 	VulkanPipeline*                   pipeline,
 	char*                             vertex_shader_filename,
 	char*                             fragment_shader_filename,
@@ -89,7 +89,7 @@ void vulkan_create_graphics_pipeline(
 		// Only used with uniform buffer or uniform buffer dynamic descriptor types.
 		descriptor_buffer_infos[binding] = (VkDescriptorBufferInfo)
 		{
-			.buffer = renderer->host_mapped_buffer.buffer,
+			.buffer = ctx->host_mapped_buffer.buffer,
 			.offset = config->offset_in_host_memory,
 			.range  = config->range_in_host_memory
 		};
@@ -97,9 +97,9 @@ void vulkan_create_graphics_pipeline(
 		// Only used with image sampler descriptor type.
 		descriptor_image_infos[binding] = (VkDescriptorImageInfo)
 		{
-			.sampler     = renderer->texture_sampler,
+			.sampler     = ctx->texture_sampler,
 			// TODO - This is dependant on having only one texture, of course.
-			.imageView   = renderer->texture_images[0].view,
+			.imageView   = ctx->texture_images[0].view,
 			.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
 		};
 
@@ -127,7 +127,7 @@ void vulkan_create_graphics_pipeline(
 		.bindingCount = descriptor_sets_len,
 		.pBindings    = descriptor_set_layout_bindings
 	};
-	vk_verify(vkCreateDescriptorSetLayout(renderer->device, &descriptor_set_layout_create_info, 0, &pipeline->descriptor_set_layout));
+	vk_verify(vkCreateDescriptorSetLayout(ctx->device, &descriptor_set_layout_create_info, 0, &pipeline->descriptor_set_layout));
 
 	VkDescriptorPoolCreateInfo descriptor_pool_create_info = 
 	{
@@ -138,7 +138,7 @@ void vulkan_create_graphics_pipeline(
 		.pPoolSizes    = descriptor_pool_sizes,
 		.maxSets       = 1
 	};
-	vk_verify(vkCreateDescriptorPool(renderer->device, &descriptor_pool_create_info, 0, &pipeline->descriptor_pool));
+	vk_verify(vkCreateDescriptorPool(ctx->device, &descriptor_pool_create_info, 0, &pipeline->descriptor_pool));
 
 	VkDescriptorSetAllocateInfo descriptor_set_allocate_info = 
 	{
@@ -148,14 +148,14 @@ void vulkan_create_graphics_pipeline(
 		.descriptorSetCount = 1,
 		.pSetLayouts        = &pipeline->descriptor_set_layout
 	};
-	vk_verify(vkAllocateDescriptorSets(renderer->device, &descriptor_set_allocate_info, &pipeline->descriptor_set));
+	vk_verify(vkAllocateDescriptorSets(ctx->device, &descriptor_set_allocate_info, &pipeline->descriptor_set));
 
 	for(uint8_t binding = 0; binding < descriptor_sets_len; binding++)
 	{
 		write_descriptor_sets[binding].dstSet = pipeline->descriptor_set;
 	}
 
-	vkUpdateDescriptorSets(renderer->device, descriptor_sets_len, write_descriptor_sets, 0, 0);
+	vkUpdateDescriptorSets(ctx->device, descriptor_sets_len, write_descriptor_sets, 0, 0);
 
 	// Define vertex input attribute descriptions.
 	VkVertexInputAttributeDescription vertex_input_attribute_descriptions[vertex_input_attributes_len];
@@ -171,8 +171,8 @@ void vulkan_create_graphics_pipeline(
 	}
 
 	// Compile shaders.
-	VkShaderModule vertex_shader   = vulkan_create_shader_module(renderer, vertex_shader_filename);
-	VkShaderModule fragment_shader = vulkan_create_shader_module(renderer, fragment_shader_filename);
+	VkShaderModule vertex_shader   = vulkan_create_shader_module(ctx, vertex_shader_filename);
+	VkShaderModule fragment_shader = vulkan_create_shader_module(ctx, fragment_shader_filename);
 	VkPipelineShaderStageCreateInfo shader_stage_create_infos[2] =
 	{
 		{
@@ -209,7 +209,7 @@ void vulkan_create_graphics_pipeline(
 		.pushConstantRangeCount = 0,
 		.pPushConstantRanges    = 0
 	};
-	vk_verify(vkCreatePipelineLayout(renderer->device, &pipeline_layout_create_info, 0, &pipeline->layout));
+	vk_verify(vkCreatePipelineLayout(ctx->device, &pipeline_layout_create_info, 0, &pipeline->layout));
 
 	// Create graphics pipeline.
 	VkGraphicsPipelineCreateInfo graphics_pipeline_create_info = 
@@ -221,7 +221,7 @@ void vulkan_create_graphics_pipeline(
 			.pNext                   = 0,
 			.viewMask                = 0,
 			.colorAttachmentCount    = 1,
-			.pColorAttachmentFormats = &renderer->surface_format.format,
+			.pColorAttachmentFormats = &ctx->surface_format.format,
 			.depthAttachmentFormat   = VK_FORMAT_D32_SFLOAT,
 			.stencilAttachmentFormat = 0
 		},
@@ -284,7 +284,7 @@ void vulkan_create_graphics_pipeline(
 			.sType                 = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
 			.pNext                 = 0,
 			.flags                 = 0,
-			.rasterizationSamples  = renderer->device_framebuffer_sample_counts,
+			.rasterizationSamples  = ctx->device_framebuffer_sample_counts,
 			.sampleShadingEnable   = VK_FALSE,
 			.minSampleShading      = VK_FALSE,
 			.pSampleMask           = 0,
@@ -342,9 +342,9 @@ void vulkan_create_graphics_pipeline(
 		.basePipelineIndex   = 0,
 	};
 
-	vk_verify(vkCreateGraphicsPipelines(renderer->device, 0, 1, &graphics_pipeline_create_info, 0, &pipeline->pipeline));
+	vk_verify(vkCreateGraphicsPipelines(ctx->device, 0, 1, &graphics_pipeline_create_info, 0, &pipeline->pipeline));
 
 	// Cleanup shader modules.
-	vkDestroyShaderModule(renderer->device, vertex_shader,   0);
-	vkDestroyShaderModule(renderer->device, fragment_shader, 0);
+	vkDestroyShaderModule(ctx->device, vertex_shader,   0);
+	vkDestroyShaderModule(ctx->device, fragment_shader, 0);
 }

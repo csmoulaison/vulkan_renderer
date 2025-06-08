@@ -8,10 +8,10 @@
 #include "linalg.c"
 #include "random.c"
 
-#include "program.c"
-#include "render_list.c"
+#define STATIC_MESHES_LEN 2
 
-#include "game.c"
+#include "program.c"
+
 
 #define VK_USE_PLATFORM_XCB_KHR
 #include <vulkan/vulkan.h>
@@ -30,7 +30,10 @@
 #include <xcb/xcb_keysyms.h>
 #include <vulkan/vulkan_xcb.h>
 
+#include "render_list.c"
 #include "vulkan.c"
+#include "renderer.c"
+#include "game.c"
 
 #define MEMORY_POOL_BYTES 1073741824
 
@@ -55,10 +58,10 @@ typedef struct
 
 	InputContext        input;
 	RenderList          render_list;
-	VulkanRenderer      renderer;
+	Renderer            renderer;
 } XcbContext;
 
-VkResult xcb_create_surface_callback(VulkanRenderer* renderer, void* context)
+VkResult xcb_create_surface_callback(VulkanContext* vulkan, void* context)
 {
 	XcbContext* xcb = (XcbContext*)context;
 	
@@ -69,7 +72,7 @@ VkResult xcb_create_surface_callback(VulkanRenderer* renderer, void* context)
 	info.connection = xcb->connection;
 	info.window     = xcb->window;
 
-	return vkCreateXcbSurfaceKHR(renderer->instance, &info, 0, &renderer->surface);
+	return vkCreateXcbSurfaceKHR(vulkan->instance, &info, 0, &vulkan->surface);
 }
 
 void print_mat(float* m)
@@ -139,7 +142,8 @@ int32_t main(int32_t argc, char** argv)
 		VK_KHR_XCB_SURFACE_EXTENSION_NAME
 	};
 
-	VulkanPlatform xcb_platform =
+	RendererPlatformData xcb_renderer_platform_data;
+	xcb_renderer_platform_data.vulkan = (VulkanPlatform)
 	{
 		.context                 = &xcb,
 		.create_surface_callback = xcb_create_surface_callback,
@@ -147,7 +151,7 @@ int32_t main(int32_t argc, char** argv)
 		.window_extensions       = window_exts
 	};
 
-	vulkan_initialize_renderer(&xcb.renderer, &xcb_platform);
+	renderer_initialize(&xcb.renderer, &xcb_renderer_platform_data);
 
 	xcb.running = true;
 
@@ -346,7 +350,7 @@ int32_t main(int32_t argc, char** argv)
 		// of both GL and Vulkan sufficiently to develop a robust renderer front-end. The ideal of the
 		// split is to conserve all possible performance characteristics of each API while minimizing the
 		// redundancy in the two implementations.
-		vulkan_loop(&xcb.renderer, &xcb.render_list);
+		renderer_loop(&xcb.renderer, &xcb.render_list);
 	}
 
 	return 0;

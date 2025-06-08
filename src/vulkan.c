@@ -3,8 +3,6 @@
 #define PIPELINES_COUNT        1
 #define MESHES_COUNT           1
 #define SWAPCHAIN_IMAGES_COUNT 4
-// NOW - instances_count will equal 2 for more meshes, of course.
-#define INSTANCES_COUNT        1
 
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_ONLY_BMP
@@ -15,7 +13,7 @@
 #include "tinyobj_loader_c/tinyobj_loader_c.h"
 
 #include "vulkan_verify.c"
-#include "vulkan_renderer.c"
+#include "vulkan_context.c"
 #include "vulkan_allocate.c"
 #include "vulkan_transient_commands.c"
 #include "vulkan_image_memory_barrier.c"
@@ -25,34 +23,34 @@
 
 typedef struct
 {
-	VkResult(*create_surface_callback)(VulkanRenderer* renderer, void* context);
+	VkResult(*create_surface_callback)(VulkanContext* ctx, void* context);
 	void*   context;
 	char**  window_extensions;
 	uint8_t window_extensions_len;
 } VulkanPlatform;
 
-void vulkan_initialize_swapchain(VulkanRenderer* renderer, bool recreate)
+void vulkan_initialize_swapchain(VulkanContext* ctx, bool recreate)
 {
 	// This function is being called in one of two situations:
 	// 1. During program initialization.
 	// 2. The platform surface has changed and swapchain related information is no longer valid.
 	if(recreate)
 	{
-		vkDeviceWaitIdle(renderer->device);
+		vkDeviceWaitIdle(ctx->device);
 
 		for(uint8_t image_index = 0; image_index < SWAPCHAIN_IMAGES_COUNT; image_index++)
 		{
-			vkDestroyImageView(renderer->device, renderer->swapchain_image_views[image_index], 0);
+			vkDestroyImageView(ctx->device, ctx->swapchain_image_views[image_index], 0);
 		}
 
-		vkDestroySwapchainKHR(renderer->device, renderer->swapchain, 0);
+		vkDestroySwapchainKHR(ctx->device, ctx->swapchain, 0);
 
-		vkDestroyImage(renderer->device, renderer->render_image.image, 0);
-		vkDestroyImageView(renderer->device, renderer->render_image.view, 0);
-		vkFreeMemory(renderer->device, renderer->render_image.memory, 0);
+		vkDestroyImage(ctx->device, ctx->render_image.image, 0);
+		vkDestroyImageView(ctx->device, ctx->render_image.view, 0);
+		vkFreeMemory(ctx->device, ctx->render_image.memory, 0);
 
-		vkDestroySemaphore(renderer->device, renderer->image_available_semaphore, 0);
-		vkDestroySemaphore(renderer->device, renderer->render_finished_semaphore, 0);
+		vkDestroySemaphore(ctx->device, ctx->image_available_semaphore, 0);
+		vkDestroySemaphore(ctx->device, ctx->render_finished_semaphore, 0);
 	}
 
 	// Query surface capabilities to give us the following info:
@@ -61,14 +59,14 @@ void vulkan_initialize_swapchain(VulkanRenderer* renderer, bool recreate)
 	// - Swapchain image count
 	VkSurfaceCapabilitiesKHR surface_capabilities;
 	vk_verify(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
-		renderer->physical_device, 
-		renderer->surface, 
+		ctx->physical_device, 
+		ctx->surface, 
 		&surface_capabilities));
 
 	VkSurfaceTransformFlagBitsKHR surface_pre_transform = surface_capabilities.currentTransform;
 
-	renderer->swapchain_extent.width  = surface_capabilities.maxImageExtent.width;
-	renderer->swapchain_extent.height = surface_capabilities.maxImageExtent.height;
+	ctx->swapchain_extent.width  = surface_capabilities.maxImageExtent.width;
+	ctx->swapchain_extent.height = surface_capabilities.maxImageExtent.height;
 
 	// CONSIDER - Not sure exactly what this logic is for. Look at it a little closer.
 	uint32_t swapchain_image_count = surface_capabilities.minImageCount + 1;
@@ -79,22 +77,22 @@ void vulkan_initialize_swapchain(VulkanRenderer* renderer, bool recreate)
 
 	// Choose the best surface format.
 	uint32_t formats_len;
-	vkGetPhysicalDeviceSurfaceFormatsKHR(renderer->physical_device, renderer->surface, &formats_len, 0);
+	vkGetPhysicalDeviceSurfaceFormatsKHR(ctx->physical_device, ctx->surface, &formats_len, 0);
 	if(formats_len == 0)
 	{
 		panic();
 	}
 
 	VkSurfaceFormatKHR formats[formats_len];
-	vkGetPhysicalDeviceSurfaceFormatsKHR(renderer->physical_device, renderer->surface, &formats_len, formats);
+	vkGetPhysicalDeviceSurfaceFormatsKHR(ctx->physical_device, ctx->surface, &formats_len, formats);
 
-	renderer->surface_format = formats[0];
+	ctx->surface_format = formats[0];
 	for(uint32_t format_index = 0; format_index < formats_len; format_index++)
 	{
 		if(formats[format_index].format == VK_FORMAT_B8G8R8A8_SRGB 
 			&& formats[format_index].colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
 		{
-			renderer->surface_format = formats[format_index];
+			ctx->surface_format = formats[format_index];
 			break;
 		}
 	}
@@ -104,10 +102,10 @@ void vulkan_initialize_swapchain(VulkanRenderer* renderer, bool recreate)
 	VkPresentModeKHR present_mode = VK_PRESENT_MODE_FIFO_KHR;
 
 	uint32_t modes_len;
-	vk_verify(vkGetPhysicalDeviceSurfacePresentModesKHR(renderer->physical_device, renderer->surface, &modes_len, 0));
+	vk_verify(vkGetPhysicalDeviceSurfacePresentModesKHR(ctx->physical_device, ctx->surface, &modes_len, 0));
 
 	VkPresentModeKHR modes[modes_len];
-	vk_verify(vkGetPhysicalDeviceSurfacePresentModesKHR(renderer->physical_device, renderer->surface, &modes_len, modes));
+	vk_verify(vkGetPhysicalDeviceSurfacePresentModesKHR(ctx->physical_device, ctx->surface, &modes_len, modes));
 
 	for(uint32_t mode_index = 0; mode_index < modes_len; mode_index++)
 	{
@@ -128,11 +126,11 @@ void vulkan_initialize_swapchain(VulkanRenderer* renderer, bool recreate)
 		.sType                 = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
 		.pNext                 = 0,
 		.flags                 = 0, 
-		.surface               = renderer->surface,
+		.surface               = ctx->surface,
 		.minImageCount         = swapchain_image_count, 
-		.imageFormat           = renderer->surface_format.format,
-		.imageColorSpace       = renderer->surface_format.colorSpace,
-		.imageExtent           = renderer->swapchain_extent,
+		.imageFormat           = ctx->surface_format.format,
+		.imageColorSpace       = ctx->surface_format.colorSpace,
+		.imageExtent           = ctx->swapchain_extent,
 		.imageArrayLayers      = 1,
 		.imageUsage            = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
 		.imageSharingMode      = VK_SHARING_MODE_EXCLUSIVE,
@@ -145,62 +143,62 @@ void vulkan_initialize_swapchain(VulkanRenderer* renderer, bool recreate)
 		.oldSwapchain          = 0
 	};
 
-	vk_verify(vkCreateSwapchainKHR(renderer->device, &swapchain_create_info, 0, &renderer->swapchain));
+	vk_verify(vkCreateSwapchainKHR(ctx->device, &swapchain_create_info, 0, &ctx->swapchain));
 
 	// Get references to the swapchain images.
 	uint32_t swapchain_images_count = SWAPCHAIN_IMAGES_COUNT;
 	vk_verify(vkGetSwapchainImagesKHR(
-		renderer->device, 
-		renderer->swapchain, 
+		ctx->device, 
+		ctx->swapchain, 
 		&swapchain_images_count, 
 		0));
 	vk_verify(vkGetSwapchainImagesKHR(
-		renderer->device, 
-		renderer->swapchain, 
+		ctx->device, 
+		ctx->swapchain, 
 		&swapchain_images_count, 
-		renderer->swapchain_images));
+		ctx->swapchain_images));
 
 	// Allocate resources for render and depth images.
 	//
 	// CONSIDER - The following description is a bit lacking in understanding.
 	// The render image is used in the rendering pipeline, and is transferred to the swapchain.
 	vulkan_allocate_image(
-		renderer,
-		&renderer->render_image,
-		renderer->swapchain_extent,
-		renderer->surface_format.format,
-		renderer->device_framebuffer_sample_counts,
+		ctx,
+		&ctx->render_image,
+		ctx->swapchain_extent,
+		ctx->surface_format.format,
+		ctx->device_framebuffer_sample_counts,
 		VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
 
 	vulkan_allocate_image(
-		renderer, 
-		&renderer->depth_image,
-		renderer->swapchain_extent,
+		ctx, 
+		&ctx->depth_image,
+		ctx->swapchain_extent,
 		VK_FORMAT_D32_SFLOAT,
-		renderer->device_framebuffer_sample_counts,
+		ctx->device_framebuffer_sample_counts,
 		VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT);
 
 	vulkan_create_image_view(
-		renderer,
-		&renderer->render_image.image,
-		&renderer->render_image.view,
-		renderer->surface_format.format,
+		ctx,
+		&ctx->render_image.image,
+		&ctx->render_image.view,
+		ctx->surface_format.format,
 		VK_IMAGE_ASPECT_COLOR_BIT);
 
 	vulkan_create_image_view(
-		renderer,
-		&renderer->depth_image.image,
-		&renderer->depth_image.view,
+		ctx,
+		&ctx->depth_image.image,
+		&ctx->depth_image.view,
 		VK_FORMAT_D32_SFLOAT,
 		VK_IMAGE_ASPECT_DEPTH_BIT);
 
 	for(uint32_t image_index = 0; image_index < SWAPCHAIN_IMAGES_COUNT; image_index++)
 	{
 		vulkan_create_image_view(
-			renderer,
-			&renderer->swapchain_images[image_index],
-			&renderer->swapchain_image_views[image_index],
-			renderer->surface_format.format,
+			ctx,
+			&ctx->swapchain_images[image_index],
+			&ctx->swapchain_image_views[image_index],
+			ctx->surface_format.format,
 			VK_IMAGE_ASPECT_COLOR_BIT);
 	}
 
@@ -215,11 +213,11 @@ void vulkan_initialize_swapchain(VulkanRenderer* renderer, bool recreate)
 		.flags = 0
 	};
 
-	vk_verify(vkCreateSemaphore(renderer->device, &semaphore_create_info, 0, &renderer->image_available_semaphore));
-	vk_verify(vkCreateSemaphore(renderer->device, &semaphore_create_info, 0, &renderer->render_finished_semaphore));
+	vk_verify(vkCreateSemaphore(ctx->device, &semaphore_create_info, 0, &ctx->image_available_semaphore));
+	vk_verify(vkCreateSemaphore(ctx->device, &semaphore_create_info, 0, &ctx->render_finished_semaphore));
 }
 
-void vulkan_initialize_renderer(VulkanRenderer* renderer, VulkanPlatform* platform)
+void vulkan_initialize(VulkanContext* ctx, VulkanPlatform* platform)
 {
 	// Verify that our desired Vulkan version is supported by the implementation.
 	uint32_t desired_api_version = VK_API_VERSION_1_3;
@@ -271,17 +269,17 @@ void vulkan_initialize_renderer(VulkanRenderer* renderer, VulkanPlatform* platfo
 		.enabledExtensionCount   = instance_extensions_len,
 		.ppEnabledExtensionNames = instance_extensions
 	};
-	vk_verify(vkCreateInstance(&instance_create_info, 0, &renderer->instance));
+	vk_verify(vkCreateInstance(&instance_create_info, 0, &ctx->instance));
 
 	// Get surface from the platform specific callback.
-	vk_verify(platform->create_surface_callback(renderer, platform->context));
+	vk_verify(platform->create_surface_callback(ctx, platform->context));
 
 	// Query all physical devices.
 	uint32_t physical_devices_len;
-	vk_verify(vkEnumeratePhysicalDevices(renderer->instance, &physical_devices_len, 0));
+	vk_verify(vkEnumeratePhysicalDevices(ctx->instance, &physical_devices_len, 0));
 
 	VkPhysicalDevice physical_devices[physical_devices_len];
-	vk_verify(vkEnumeratePhysicalDevices(renderer->instance, &physical_devices_len, physical_devices));
+	vk_verify(vkEnumeratePhysicalDevices(ctx->instance, &physical_devices_len, physical_devices));
 
 	// Pick the best device for our needs.
 	typedef struct
@@ -329,7 +327,7 @@ void vulkan_initialize_renderer(VulkanRenderer* renderer, VulkanPlatform* platfo
 			}
 
 			VkBool32 present_support;
-			vkGetPhysicalDeviceSurfaceSupportKHR(candidate.handle, queue_index, renderer->surface, &present_support);
+			vkGetPhysicalDeviceSurfaceSupportKHR(candidate.handle, queue_index, ctx->surface, &present_support);
 			if(present_support)
 			{
 				candidate.present_family_index = queue_index;
@@ -425,9 +423,9 @@ void vulkan_initialize_renderer(VulkanRenderer* renderer, VulkanPlatform* platfo
 		panic();
 	}
 
-	renderer->physical_device = best_physical_device.handle;
-	renderer->device_max_sampler_anisotropy    = best_physical_device.max_sampler_anisotropy;
-	renderer->device_framebuffer_sample_counts = best_physical_device.framebuffer_color_sample_counts;
+	ctx->physical_device = best_physical_device.handle;
+	ctx->device_max_sampler_anisotropy    = best_physical_device.max_sampler_anisotropy;
+	ctx->device_framebuffer_sample_counts = best_physical_device.framebuffer_color_sample_counts;
 
 	// Create logical device queues.
 	uint32_t queue_family_indices[2] = 
@@ -471,7 +469,7 @@ void vulkan_initialize_renderer(VulkanRenderer* renderer, VulkanPlatform* platfo
 		},
 		.features = {}
 	};
-	vkGetPhysicalDeviceFeatures2(renderer->physical_device, &device_features_2);
+	vkGetPhysicalDeviceFeatures2(ctx->physical_device, &device_features_2);
 
 	VkDeviceCreateInfo device_create_info =
 	{
@@ -486,31 +484,31 @@ void vulkan_initialize_renderer(VulkanRenderer* renderer, VulkanPlatform* platfo
 		.ppEnabledExtensionNames = required_extensions,
 		.pEnabledFeatures        = 0
 	};
-	vk_verify(vkCreateDevice(renderer->physical_device, &device_create_info, 0, &renderer->device));
+	vk_verify(vkCreateDevice(ctx->physical_device, &device_create_info, 0, &ctx->device));
 
-	vkGetDeviceQueue(renderer->device, best_physical_device.graphics_family_index, 0, &renderer->graphics_queue);
-	vkGetDeviceQueue(renderer->device, best_physical_device.present_family_index, 0, &renderer->present_queue);
+	vkGetDeviceQueue(ctx->device, best_physical_device.graphics_family_index, 0, &ctx->graphics_queue);
+	vkGetDeviceQueue(ctx->device, best_physical_device.present_family_index, 0, &ctx->present_queue);
 
 	// Initially initialize swapchain.
-	vulkan_initialize_swapchain(renderer, false);
+	vulkan_initialize_swapchain(ctx, false);
 
 	// Allocate host mapped memory buffer.
 	VkDeviceSize host_mapped_memory_size = sizeof(VulkanHostMappedData);
 
 	vulkan_allocate_memory_buffer(
-		renderer,
-		&renderer->host_mapped_buffer,
+		ctx,
+		&ctx->host_mapped_buffer,
 		host_mapped_memory_size,
 		VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
 		VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 
 	vkMapMemory(
-		renderer->device, 
-		renderer->host_mapped_buffer.memory, 
+		ctx->device, 
+		ctx->host_mapped_buffer.memory, 
 		0, 
 		host_mapped_memory_size, 
 		0, 
-		(void*)&renderer->host_mapped_data);
+		(void*)&ctx->host_mapped_data);
 
 	// Create command pool and allocate main command buffer
 	VkCommandPoolCreateInfo command_pool_create_info = 
@@ -521,17 +519,17 @@ void vulkan_initialize_renderer(VulkanRenderer* renderer, VulkanPlatform* platfo
 		// NOTE - This is kind of icky because this variable was set so long ago and appears proximal there.
 		.queueFamilyIndex = best_physical_device.graphics_family_index
 	};
-	vk_verify(vkCreateCommandPool(renderer->device, &command_pool_create_info, 0, &renderer->command_pool));
+	vk_verify(vkCreateCommandPool(ctx->device, &command_pool_create_info, 0, &ctx->command_pool));
 
 	VkCommandBufferAllocateInfo command_buffer_allocate_info = 
 	{
 		.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
 		.pNext              = 0,
-		.commandPool        = renderer->command_pool,
+		.commandPool        = ctx->command_pool,
 		.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
 		.commandBufferCount = 1
 	};
-	vk_verify(vkAllocateCommandBuffers(renderer->device, &command_buffer_allocate_info, &renderer->main_command_buffer));
+	vk_verify(vkAllocateCommandBuffers(ctx->device, &command_buffer_allocate_info, &ctx->main_command_buffer));
 
 	// Create texture sampler.
 	VkSamplerCreateInfo sampler_create_info = 
@@ -547,7 +545,7 @@ void vulkan_initialize_renderer(VulkanRenderer* renderer, VulkanPlatform* platfo
 		.addressModeW            = VK_SAMPLER_ADDRESS_MODE_REPEAT,
 		.mipLodBias              = 0.0f,
 		.anisotropyEnable        = VK_TRUE,
-		.maxAnisotropy           = renderer->device_max_sampler_anisotropy,
+		.maxAnisotropy           = ctx->device_max_sampler_anisotropy,
 		.compareEnable           = VK_FALSE,
 		.compareOp               = VK_COMPARE_OP_ALWAYS,
 		.minLod                  = 0.0f,
@@ -555,7 +553,7 @@ void vulkan_initialize_renderer(VulkanRenderer* renderer, VulkanPlatform* platfo
 		.borderColor             = VK_BORDER_COLOR_INT_OPAQUE_BLACK,
 		.unnormalizedCoordinates = VK_FALSE
 	};
-	vk_verify(vkCreateSampler(renderer->device, &sampler_create_info, 0, &renderer->texture_sampler));
+	vk_verify(vkCreateSampler(ctx->device, &sampler_create_info, 0, &ctx->texture_sampler));
 
 	// Allocate texture image.
 	// Load image from disk.
@@ -574,35 +572,35 @@ void vulkan_initialize_renderer(VulkanRenderer* renderer, VulkanPlatform* platfo
 	VkDeviceSize staging_buffer_size = texture_w * texture_h * 4;
 
 	vulkan_allocate_memory_buffer(
-		renderer,
+		ctx,
 		&staging_memory_buffer,
 		staging_buffer_size,
 		VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
 		VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 
 	void* mapped_buffer_data;
-	vkMapMemory(renderer->device, staging_memory_buffer.memory, 0, staging_buffer_size, 0, &mapped_buffer_data);
+	vkMapMemory(ctx->device, staging_memory_buffer.memory, 0, staging_buffer_size, 0, &mapped_buffer_data);
 	memcpy(mapped_buffer_data, image_pixels, (size_t)staging_buffer_size);
-	vkUnmapMemory(renderer->device, staging_memory_buffer.memory);
+	vkUnmapMemory(ctx->device, staging_memory_buffer.memory);
 
 	stbi_image_free(image_pixels);
 
 	// Allocate image memory.
 	// TODO - Currently this assumes only one texture image.
 	vulkan_allocate_image(
-		renderer,
-		&renderer->texture_images[0],
+		ctx,
+		&ctx->texture_images[0],
 		(VkExtent2D){ texture_w, texture_h },
 		VK_FORMAT_R8G8B8A8_SRGB,
 		VK_SAMPLE_COUNT_1_BIT,
 		VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
 
 	// Transfer image from staging buffer to 
-	VkCommandBuffer transient_command_buffer = vulkan_start_transient_commands(renderer);
+	VkCommandBuffer transient_command_buffer = vulkan_start_transient_commands(ctx);
 	{
 		vulkan_image_memory_barrier(
 			transient_command_buffer,
-			renderer->texture_images[0].image,
+			ctx->texture_images[0].image,
 			VK_IMAGE_ASPECT_COLOR_BIT,
 			VK_IMAGE_LAYOUT_UNDEFINED,
 			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
@@ -630,14 +628,14 @@ void vulkan_initialize_renderer(VulkanRenderer* renderer, VulkanPlatform* platfo
 		vkCmdCopyBufferToImage(
 			transient_command_buffer,
 			staging_memory_buffer.buffer,
-			renderer->texture_images[0].image,
+			ctx->texture_images[0].image,
 			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
 			1,
 			&region);
 
 		vulkan_image_memory_barrier(
 			transient_command_buffer,
-			renderer->texture_images[0].image,
+			ctx->texture_images[0].image,
 			VK_IMAGE_ASPECT_COLOR_BIT,
 			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
 			VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
@@ -646,16 +644,16 @@ void vulkan_initialize_renderer(VulkanRenderer* renderer, VulkanPlatform* platfo
 			VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
 			VK_PIPELINE_STAGE_TRANSFER_BIT);
 	}
-	vulkan_end_transient_commands(renderer, transient_command_buffer, renderer->graphics_queue);
+	vulkan_end_transient_commands(ctx, transient_command_buffer, ctx->graphics_queue);
 
-	vkDestroyBuffer(renderer->device, staging_memory_buffer.buffer, 0);
-	vkFreeMemory(renderer->device, staging_memory_buffer.memory, 0);
+	vkDestroyBuffer(ctx->device, staging_memory_buffer.buffer, 0);
+	vkFreeMemory(ctx->device, staging_memory_buffer.memory, 0);
 
 	// Create texture image view
 	vulkan_create_image_view(
-		renderer,
-		&renderer->texture_images[0].image,
-		&renderer->texture_images[0].view,
+		ctx,
+		&ctx->texture_images[0].image,
+		&ctx->texture_images[0].view,
 		VK_FORMAT_R8G8B8A8_SRGB,
 		VK_IMAGE_ASPECT_COLOR_BIT);
 
@@ -699,8 +697,8 @@ void vulkan_initialize_renderer(VulkanRenderer* renderer, VulkanPlatform* platfo
 	// Create graphics pipeline.
 	// TODO - This is dependant on only having one pipeline.
 	vulkan_create_graphics_pipeline(
-		renderer,
-		&renderer->pipelines[0],
+		ctx,
+		&ctx->pipelines[0],
 		"shaders/world_vertex.spv",
 		"shaders/world_fragment.spv",
 		descriptor_set_configs,
@@ -720,7 +718,7 @@ void vulkan_initialize_renderer(VulkanRenderer* renderer, VulkanPlatform* platfo
 		VulkanMeshData* data = &mesh_datas[mesh_index];
 		vulkan_load_mesh(data, "assets/viking_room.obj");
 
-		VulkanAllocatedMesh* mesh = &renderer->allocated_meshes[mesh_index];
+		VulkanAllocatedMesh* mesh = &ctx->allocated_meshes[mesh_index];
 		mesh->vertices_len = data->vertices_len;
 		mesh->indices_len  = data->indices_len;
 
@@ -734,18 +732,18 @@ void vulkan_initialize_renderer(VulkanRenderer* renderer, VulkanPlatform* platfo
 	}
 
 	vulkan_allocate_memory_buffer(
-		renderer,
+		ctx,
 		&staging_memory_buffer,
 		staging_buffer_size, 
 		VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
 		VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 
-	vkMapMemory(renderer->device, staging_memory_buffer.memory, 0, staging_buffer_size, 0, &mapped_buffer_data);
+	vkMapMemory(ctx->device, staging_memory_buffer.memory, 0, staging_buffer_size, 0, &mapped_buffer_data);
 	{
 		size_t total_offset = 0;
 		for(uint8_t mesh_index = 0; mesh_index < meshes_len; mesh_index++)
 		{
-			VulkanAllocatedMesh* mesh = &renderer->allocated_meshes[mesh_index];
+			VulkanAllocatedMesh* mesh = &ctx->allocated_meshes[mesh_index];
 			VulkanMeshData*      data = &mesh_datas[mesh_index];
 
 			memcpy(mapped_buffer_data + mesh->vertex_buffer_offset, data->vertices, mesh_vertex_buffer_sizes[mesh_index]);
@@ -753,28 +751,29 @@ void vulkan_initialize_renderer(VulkanRenderer* renderer, VulkanPlatform* platfo
 			total_offset += mesh_vertex_buffer_sizes[mesh_index] + mesh_index_buffer_sizes[mesh_index];
 		}
 	}
-	vkUnmapMemory(renderer->device, staging_memory_buffer.memory);
+	vkUnmapMemory(ctx->device, staging_memory_buffer.memory);
 
 	vulkan_allocate_memory_buffer(
-		renderer,
-		&renderer->mesh_data_memory_buffer,
+		ctx,
+		&ctx->mesh_data_memory_buffer,
 		staging_buffer_size, 
 		VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
 		VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
-	transient_command_buffer = vulkan_start_transient_commands(renderer);
+	transient_command_buffer = vulkan_start_transient_commands(ctx);
 	{
 		VkBufferCopy buffer_copy = {};
 		buffer_copy.size = staging_buffer_size;
-		vkCmdCopyBuffer(transient_command_buffer, staging_memory_buffer.buffer, renderer->mesh_data_memory_buffer.buffer, 1, &buffer_copy);
+		vkCmdCopyBuffer(transient_command_buffer, staging_memory_buffer.buffer, ctx->mesh_data_memory_buffer.buffer, 1, &buffer_copy);
 	}
-	vulkan_end_transient_commands(renderer, transient_command_buffer, renderer->graphics_queue);
+	vulkan_end_transient_commands(ctx, transient_command_buffer, ctx->graphics_queue);
 
-	vkDestroyBuffer(renderer->device, staging_memory_buffer.buffer, 0);
-	vkFreeMemory(renderer->device, staging_memory_buffer.memory, 0);
+	vkDestroyBuffer(ctx->device, staging_memory_buffer.buffer, 0);
+	vkFreeMemory(ctx->device, staging_memory_buffer.memory, 0);
 }
 
-void vulkan_loop(VulkanRenderer* renderer, RenderList* render_list)
+// NOW - what does vulkan know about? what is the render list?
+void vulkan_loop(VulkanContext* ctx, RenderList* render_list)
 {
 	// Translate game memory to uniform buffer object memory.
 	VulkanHostMappedData mem = {};
@@ -782,24 +781,34 @@ void vulkan_loop(VulkanRenderer* renderer, RenderList* render_list)
 		mem.global.clear_color = render_list->clear_color;
 
 		glm_lookat(render_list->camera_position.data, render_list->camera_target.data, vec3_new(0, 1, 0).data, mem.global.view);
-		glm_perspective(radians(75), (float)renderer->swapchain_extent.width / (float)renderer->swapchain_extent.height, 0.1, 100, mem.global.projection);
+		glm_perspective(radians(75), (float)ctx->swapchain_extent.width / (float)ctx->swapchain_extent.height, 0.1, 100, mem.global.projection);
 		mem.global.projection[1][1] *= -1;
 
-		memcpy(mem.instance.models, render_list->cube_transform, sizeof(mem.instance.models[0]));
+		mat4 mesh_transforms[render_list->static_meshes_len];
+		for(uint8_t mesh_index = 0; mesh_index < render_list->static_meshes_len; mesh_index++)
+		{
+		 	mat4* transform  = &mesh_transforms[mesh_index];
+		 	StaticMesh* mesh = &render_list->static_meshes[mesh_index];
+
+		    glm_mat4_identity(*transform);
+		    glm_translate(*transform, mesh->position.data);
+		    glm_mat4_mul(*transform, mesh->orientation, *transform);
+		}
+		memcpy(mem.instance.models, mesh_transforms, sizeof(mem.instance.models));
 	}
-	memcpy(renderer->host_mapped_data, &mem, sizeof(mem));
+	memcpy(ctx->host_mapped_data, &mem, sizeof(mem));
 
 	uint32_t image_index;
 	VkResult res = vkAcquireNextImageKHR(
-		renderer->device, 
-		renderer->swapchain, 
+		ctx->device, 
+		ctx->swapchain, 
 		UINT64_MAX, 
-		renderer->image_available_semaphore, 
+		ctx->image_available_semaphore, 
 		0, 
 		&image_index);
 	if(res == VK_ERROR_OUT_OF_DATE_KHR || res == VK_SUBOPTIMAL_KHR)
 	{
-		vulkan_initialize_swapchain(renderer, true);
+		vulkan_initialize_swapchain(ctx, true);
 		return;
 	}
 
@@ -811,12 +820,12 @@ void vulkan_loop(VulkanRenderer* renderer, RenderList* render_list)
 		.pInheritanceInfo = 0
 	};
 
-	vkBeginCommandBuffer(renderer->main_command_buffer, &command_buffer_begin_info);
+	vkBeginCommandBuffer(ctx->main_command_buffer, &command_buffer_begin_info);
 	{
 		// Render image transfer
 		vulkan_image_memory_barrier(
-			renderer->main_command_buffer, 
-			renderer->swapchain_images[image_index], 
+			ctx->main_command_buffer, 
+			ctx->swapchain_images[image_index], 
 			VK_IMAGE_ASPECT_COLOR_BIT,
 			VK_IMAGE_LAYOUT_UNDEFINED,
 			VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
@@ -827,8 +836,8 @@ void vulkan_loop(VulkanRenderer* renderer, RenderList* render_list)
 
 		// Depth image transfer
 		vulkan_image_memory_barrier(
-			renderer->main_command_buffer, 
-			renderer->depth_image.image, 
+			ctx->main_command_buffer, 
+			ctx->depth_image.image, 
 			VK_IMAGE_ASPECT_DEPTH_BIT,
 			VK_IMAGE_LAYOUT_UNDEFINED,
 			VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
@@ -840,17 +849,17 @@ void vulkan_loop(VulkanRenderer* renderer, RenderList* render_list)
 		VkRenderingInfo render_info = 
 		{
 			.sType                = VK_STRUCTURE_TYPE_RENDERING_INFO,
-			.renderArea           = (VkRect2D){{0, 0}, renderer->swapchain_extent},
+			.renderArea           = (VkRect2D){{0, 0}, ctx->swapchain_extent},
 			.layerCount           = 1,
 			.colorAttachmentCount = 1,
 			.pColorAttachments    = &(VkRenderingAttachmentInfo)
 			{
 				.sType                   = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
 				.pNext                   = 0,
-				.imageView               = renderer->render_image.view,
+				.imageView               = ctx->render_image.view,
 				.imageLayout             = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
 				.resolveMode             = VK_RESOLVE_MODE_AVERAGE_BIT,
-				.resolveImageView        = renderer->swapchain_image_views[image_index],
+				.resolveImageView        = ctx->swapchain_image_views[image_index],
 				.resolveImageLayout      = VK_IMAGE_LAYOUT_GENERAL,
 				.loadOp                  = VK_ATTACHMENT_LOAD_OP_CLEAR,
 				.storeOp                 = VK_ATTACHMENT_STORE_OP_STORE,
@@ -866,7 +875,7 @@ void vulkan_loop(VulkanRenderer* renderer, RenderList* render_list)
 			{
 				.sType                   = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
 				.pNext                   = 0,
-				.imageView               = renderer->depth_image.view,
+				.imageView               = ctx->depth_image.view,
 				.imageLayout             = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
 				.resolveMode             = VK_RESOLVE_MODE_NONE,
 				.resolveImageView        = 0,
@@ -882,64 +891,64 @@ void vulkan_loop(VulkanRenderer* renderer, RenderList* render_list)
 			.pStencilAttachment   = 0
 		};
 
-		vkCmdBeginRendering(renderer->main_command_buffer, &render_info);
+		vkCmdBeginRendering(ctx->main_command_buffer, &render_info);
 		{
 			VkViewport viewport = 
 			{
 				.x        = 0,
 				.y        = 0,
-				.width    = (float)renderer->swapchain_extent.width,
-				.height   = (float)renderer->swapchain_extent.height,
+				.width    = (float)ctx->swapchain_extent.width,
+				.height   = (float)ctx->swapchain_extent.height,
 				.minDepth = 0,
 				.maxDepth = 1
 			};
-			vkCmdSetViewport(renderer->main_command_buffer, 0, 1, &viewport);
+			vkCmdSetViewport(ctx->main_command_buffer, 0, 1, &viewport);
 
 			VkRect2D scissor = 
 			{
 				.offset = (VkOffset2D){0, 0},
-				.extent = renderer->swapchain_extent
+				.extent = ctx->swapchain_extent
 			};
-			vkCmdSetScissor(renderer->main_command_buffer, 0, 1, &scissor);
+			vkCmdSetScissor(ctx->main_command_buffer, 0, 1, &scissor);
 
 			// Render world
 			// TODO - This only involves one pipeline, of course.
-			vkCmdBindPipeline(renderer->main_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, renderer->pipelines[0].pipeline);
+			vkCmdBindPipeline(ctx->main_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, ctx->pipelines[0].pipeline);
 
-			VkDeviceSize offsets[] = {renderer->allocated_meshes[0].vertex_buffer_offset};
+			VkDeviceSize offsets[] = {ctx->allocated_meshes[0].vertex_buffer_offset};
 			vkCmdBindVertexBuffers(
-				renderer->main_command_buffer, 
+				ctx->main_command_buffer, 
 				0, 
 				1, 
-				&renderer->mesh_data_memory_buffer.buffer,
+				&ctx->mesh_data_memory_buffer.buffer,
 				offsets);
 
 			vkCmdBindIndexBuffer(
-				renderer->main_command_buffer, 
-				renderer->mesh_data_memory_buffer.buffer, 
-				renderer->allocated_meshes[0].index_buffer_offset, 
+				ctx->main_command_buffer, 
+				ctx->mesh_data_memory_buffer.buffer, 
+				ctx->allocated_meshes[0].index_buffer_offset, 
 				VK_INDEX_TYPE_UINT32);
 
 			for(uint16_t instance = 0; instance < 1; instance++) {
 				uint32_t dynamic_offset = instance * sizeof(mat4);
 
 				vkCmdBindDescriptorSets(
-					renderer->main_command_buffer, 
+					ctx->main_command_buffer, 
 					VK_PIPELINE_BIND_POINT_GRAPHICS, 
-					renderer->pipelines[0].layout, 
+					ctx->pipelines[0].layout, 
 					0, 
 					1, 
-					&renderer->pipelines[0].descriptor_set,
+					&ctx->pipelines[0].descriptor_set,
 					1,
 					&dynamic_offset);
-				vkCmdDrawIndexed(renderer->main_command_buffer, renderer->allocated_meshes[0].indices_len, 1, 0, 0, 0);
+				vkCmdDrawIndexed(ctx->main_command_buffer, ctx->allocated_meshes[0].indices_len, 1, 0, 0, 0);
 			}
 		}
-		vkCmdEndRendering(renderer->main_command_buffer);
+		vkCmdEndRendering(ctx->main_command_buffer);
 
 		vulkan_image_memory_barrier(
-			renderer->main_command_buffer, 
-			renderer->swapchain_images[image_index], 
+			ctx->main_command_buffer, 
+			ctx->swapchain_images[image_index], 
 			VK_IMAGE_ASPECT_COLOR_BIT,
 			VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
 			VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
@@ -948,7 +957,7 @@ void vulkan_loop(VulkanRenderer* renderer, RenderList* render_list)
 			VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
 			VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
 	}
-	vkEndCommandBuffer(renderer->main_command_buffer);
+	vkEndCommandBuffer(ctx->main_command_buffer);
 
 	// We wait to submit until that images is available from before. We did all
 	// this prior stuff in the meantime, in theory.
@@ -957,33 +966,33 @@ void vulkan_loop(VulkanRenderer* renderer, RenderList* render_list)
 		.sType                = VK_STRUCTURE_TYPE_SUBMIT_INFO,
 		.pNext                = 0,
 		.waitSemaphoreCount   = 1,
-		.pWaitSemaphores      = &renderer->image_available_semaphore,
+		.pWaitSemaphores      = &ctx->image_available_semaphore,
 		.pWaitDstStageMask    = &(VkPipelineStageFlags){ VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT },
 		.commandBufferCount   = 1,
-		.pCommandBuffers      = &renderer->main_command_buffer,
+		.pCommandBuffers      = &ctx->main_command_buffer,
 		.signalSemaphoreCount = 1,
-		.pSignalSemaphores    = &renderer->render_finished_semaphore
+		.pSignalSemaphores    = &ctx->render_finished_semaphore
 	};
-	vkQueueSubmit(renderer->graphics_queue, 1, &submit_info, 0);
+	vkQueueSubmit(ctx->graphics_queue, 1, &submit_info, 0);
 
 	VkPresentInfoKHR present_info = 
 	{
 		.sType              = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
 		.pNext              = 0,
 		.waitSemaphoreCount = 1,
-		.pWaitSemaphores    = &renderer->render_finished_semaphore,
+		.pWaitSemaphores    = &ctx->render_finished_semaphore,
 		.swapchainCount     = 1,
-		.pSwapchains        = &renderer->swapchain,
+		.pSwapchains        = &ctx->swapchain,
 		.pImageIndices      = &image_index,
 		.pResults           = 0
 	};
 
-	res = vkQueuePresentKHR(renderer->present_queue, &present_info); 
+	res = vkQueuePresentKHR(ctx->present_queue, &present_info); 
 	if(res == VK_ERROR_OUT_OF_DATE_KHR || res == VK_SUBOPTIMAL_KHR)
 	{
-		vulkan_initialize_swapchain(renderer, true);
+		vulkan_initialize_swapchain(ctx, true);
 		return;
 	}
 
-	vkDeviceWaitIdle(renderer->device);
+	vkDeviceWaitIdle(ctx->device);
 }

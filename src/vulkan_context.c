@@ -30,7 +30,7 @@ typedef struct
 
 typedef struct
 {
-	alignas(16) mat4 models[INSTANCES_COUNT];
+	alignas(16) mat4 models[STATIC_MESHES_LEN];
 } VulkanHostMappedInstance;
 
 typedef struct
@@ -107,4 +107,4 @@ typedef struct
 	// included in swapchain creation?
 	float                 device_max_sampler_anisotropy;
 	VkSampleCountFlagBits device_framebuffer_sample_counts;
-} VulkanRenderer;
+} VulkanContext;

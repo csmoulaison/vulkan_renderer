@@ -1,9 +1,18 @@
 typedef struct
 {
-	Vec3 clear_color;
+	uint32_t asset_handle;
+	Vec3     position;
+	mat4     orientation;
+} StaticMesh;
 
-	Vec3 camera_position;
-	Vec3 camera_target;
+typedef struct
+{
+	Vec3       clear_color;
 
-	mat4 cube_transform;
+	Vec3       camera_position;
+	Vec3       camera_target;
+
+	StaticMesh static_meshes[STATIC_MESHES_LEN];
+	uint32_t   static_meshes_len;
 } RenderList;
+

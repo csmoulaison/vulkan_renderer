@@ -1,5 +1,5 @@
 void vulkan_create_image_view(
-	VulkanRenderer*    renderer,
+	VulkanContext*     vulkan,
 	VkImage*           image,
 	VkImageView*       image_view,
 	VkFormat           format,
@@ -20,5 +20,5 @@ void vulkan_create_image_view(
 			.layerCount     = 1
 		}
 	};
-	vk_verify(vkCreateImageView(renderer->device, &image_view_create_info, 0, image_view));
+	vk_verify(vkCreateImageView(vulkan->device, &image_view_create_info, 0, image_view));
 }

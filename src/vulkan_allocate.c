@@ -1,11 +1,11 @@
 void vulkan_allocate_memory(
-	VulkanRenderer*      renderer, 
+	VulkanContext*       ctx, 
 	VkDeviceMemory*      memory,
 	VkMemoryRequirements requirements,
 	uint32_t             type_mask)
 {
 	VkPhysicalDeviceMemoryProperties properties;
-	vkGetPhysicalDeviceMemoryProperties(renderer->physical_device, &properties);
+	vkGetPhysicalDeviceMemoryProperties(ctx->physical_device, &properties);
 
 	uint32_t suitable_type_index = UINT32_MAX;
 	for(uint32_t type_index = 0; type_index < properties.memoryTypeCount; type_index++)
@@ -29,11 +29,11 @@ void vulkan_allocate_memory(
 		.allocationSize  = requirements.size,
 		.memoryTypeIndex = suitable_type_index
 	};
-	vk_verify(vkAllocateMemory(renderer->device, &allocate_info, 0, memory));
+	vk_verify(vkAllocateMemory(ctx->device, &allocate_info, 0, memory));
 }
 
 void vulkan_allocate_memory_buffer(
-	VulkanRenderer*       renderer,
+	VulkanContext*        ctx,
 	VulkanMemoryBuffer*   memory_buffer,
 	VkDeviceSize          size, 
 	VkBufferUsageFlags    usage_flags, 
@@ -50,21 +50,21 @@ void vulkan_allocate_memory_buffer(
 		.queueFamilyIndexCount = 0,
 		.pQueueFamilyIndices   = 0
 	};
-	vk_verify(vkCreateBuffer(renderer->device, &buffer_create_info, 0, &memory_buffer->buffer));
+	vk_verify(vkCreateBuffer(ctx->device, &buffer_create_info, 0, &memory_buffer->buffer));
 
 	VkMemoryRequirements requirements;
-	vkGetBufferMemoryRequirements(renderer->device, memory_buffer->buffer, &requirements);
+	vkGetBufferMemoryRequirements(ctx->device, memory_buffer->buffer, &requirements);
 
 	vulkan_allocate_memory(
-		renderer,
+		ctx,
 		&memory_buffer->memory,
 		requirements, 
 		VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-	vk_verify(vkBindBufferMemory(renderer->device, memory_buffer->buffer, memory_buffer->memory, 0));
+	vk_verify(vkBindBufferMemory(ctx->device, memory_buffer->buffer, memory_buffer->memory, 0));
 }
 
 void vulkan_allocate_image(
-	VulkanRenderer*       renderer,
+	VulkanContext*        ctx,
 	VulkanAllocatedImage* allocated_image,
 	VkExtent2D            extent,
 	VkFormat              format,
@@ -89,15 +89,15 @@ void vulkan_allocate_image(
 		.queueFamilyIndexCount = 0,
 		.initialLayout         = VK_IMAGE_LAYOUT_UNDEFINED
 	};
-	vk_verify(vkCreateImage(renderer->device, &image_create_info, 0, &allocated_image->image));
+	vk_verify(vkCreateImage(ctx->device, &image_create_info, 0, &allocated_image->image));
 
 	VkMemoryRequirements requirements = {};
-	vkGetImageMemoryRequirements(renderer->device, allocated_image->image, &requirements);
+	vkGetImageMemoryRequirements(ctx->device, allocated_image->image, &requirements);
 
 	vulkan_allocate_memory(
-		renderer,
+		ctx,
 		&allocated_image->memory,
 		requirements, 
 		VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-	vk_verify(vkBindImageMemory(renderer->device, allocated_image->image, allocated_image->memory, 0));
+	vk_verify(vkBindImageMemory(ctx->device, allocated_image->image, allocated_image->memory, 0));
 }
